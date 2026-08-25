@@ -5,7 +5,6 @@
   const TEXT_ENCODER = new TextEncoder();
   const TEXT_DECODER = new TextDecoder();
   const CHUNK_SIZE = 48 * 1024;
-  const PERIOD_OPTIONS = ['1st half', '2nd half', 'Extra time'];
 
   function parseFragment() {
     const raw = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
@@ -97,25 +96,25 @@
     return encodeJson(publicJwk);
   }
 
-  function authMessage(room, nonce, targetPeerId = '') {
-    return TEXT_ENCODER.encode(`${PROTOCOL}|auth|${room}|${targetPeerId}|${nonce}`);
+  function authMessage(room, nonce) {
+    return TEXT_ENCODER.encode(`${PROTOCOL}|auth|${room}|${nonce}`);
   }
 
-  async function signChallenge(privateKey, room, nonce, targetPeerId = '') {
+  async function signChallenge(privateKey, room, nonce) {
     const signature = await crypto.subtle.sign(
       { name: 'ECDSA', hash: 'SHA-256' },
       privateKey,
-      authMessage(room, nonce, targetPeerId)
+      authMessage(room, nonce)
     );
     return bytesToBase64Url(new Uint8Array(signature));
   }
 
-  async function verifyChallenge(publicKey, room, nonce, signature, targetPeerId = '') {
+  async function verifyChallenge(publicKey, room, nonce, signature) {
     return crypto.subtle.verify(
       { name: 'ECDSA', hash: 'SHA-256' },
       publicKey,
       base64UrlToBytes(signature),
-      authMessage(room, nonce, targetPeerId)
+      authMessage(room, nonce)
     );
   }
 
@@ -142,38 +141,18 @@
     area.remove();
   }
 
-  function clampInt(value, min, max, fallback = min) {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isNaN(parsed)) return fallback;
-    return Math.min(max, Math.max(min, parsed));
-  }
-
   function clampScore(value) {
-    return clampInt(value, 0, 999, 0);
-  }
-
-  function normalizePeriod(value) {
-    const normalized = String(value || '').trim();
-    return PERIOD_OPTIONS.includes(normalized) ? normalized : '1st half';
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isNaN(parsed)) return 0;
+    return Math.min(999, Math.max(0, parsed));
   }
 
   function normalizeState(source = {}) {
-    const clockMinutes = clampInt(source.clock_minutes, 15, 20, 15) === 20 ? 20 : 15;
-    const fallbackClock = clockMinutes * 60;
     return {
       home_name: String(source.home_name ?? 'GOSPODARZE').slice(0, 40),
       away_name: String(source.away_name ?? 'GOŚCIE').slice(0, 40),
       home_score: clampScore(source.home_score),
-      away_score: clampScore(source.away_score),
-      league_name: String(source.league_name ?? 'VRFS').slice(0, 40),
-      show_league_name: Boolean(source.show_league_name ?? true),
-      show_league_logo: Boolean(source.show_league_logo ?? true),
-      overlay_width: clampInt(source.overlay_width, 760, 1500, 1120),
-      clock_period: normalizePeriod(source.clock_period),
-      clock_minutes: clockMinutes,
-      clock_running: Boolean(source.clock_running ?? false),
-      clock_remaining_seconds: clampInt(source.clock_remaining_seconds, 0, 3599, fallbackClock),
-      clock_anchor_epoch: clampInt(source.clock_anchor_epoch, 0, 9999999999999, 0)
+      away_score: clampScore(source.away_score)
     };
   }
 
@@ -183,30 +162,7 @@
     if (Object.prototype.hasOwnProperty.call(source, 'away_name')) patch.away_name = String(source.away_name ?? '').slice(0, 40);
     if (Object.prototype.hasOwnProperty.call(source, 'home_score')) patch.home_score = clampScore(source.home_score);
     if (Object.prototype.hasOwnProperty.call(source, 'away_score')) patch.away_score = clampScore(source.away_score);
-    if (Object.prototype.hasOwnProperty.call(source, 'league_name')) patch.league_name = String(source.league_name ?? '').slice(0, 40);
-    if (Object.prototype.hasOwnProperty.call(source, 'show_league_name')) patch.show_league_name = Boolean(source.show_league_name);
-    if (Object.prototype.hasOwnProperty.call(source, 'show_league_logo')) patch.show_league_logo = Boolean(source.show_league_logo);
-    if (Object.prototype.hasOwnProperty.call(source, 'overlay_width')) patch.overlay_width = clampInt(source.overlay_width, 760, 1500, 1120);
-    if (Object.prototype.hasOwnProperty.call(source, 'clock_period')) patch.clock_period = normalizePeriod(source.clock_period);
-    if (Object.prototype.hasOwnProperty.call(source, 'clock_minutes')) patch.clock_minutes = clampInt(source.clock_minutes, 15, 20, 15) === 20 ? 20 : 15;
-    if (Object.prototype.hasOwnProperty.call(source, 'clock_running')) patch.clock_running = Boolean(source.clock_running);
-    if (Object.prototype.hasOwnProperty.call(source, 'clock_remaining_seconds')) patch.clock_remaining_seconds = clampInt(source.clock_remaining_seconds, 0, 3599, 0);
-    if (Object.prototype.hasOwnProperty.call(source, 'clock_anchor_epoch')) patch.clock_anchor_epoch = clampInt(source.clock_anchor_epoch, 0, 9999999999999, 0);
     return patch;
-  }
-
-  function getClockRemaining(state, now = Date.now()) {
-    const normalized = normalizeState(state);
-    if (!normalized.clock_running || !normalized.clock_anchor_epoch) return normalized.clock_remaining_seconds;
-    const elapsed = Math.max(0, Math.floor((now - normalized.clock_anchor_epoch) / 1000));
-    return Math.max(0, normalized.clock_remaining_seconds - elapsed);
-  }
-
-  function formatClock(totalSeconds) {
-    const safe = Math.max(0, Number.parseInt(totalSeconds, 10) || 0);
-    const minutes = Math.floor(safe / 60).toString().padStart(2, '0');
-    const seconds = (safe % 60).toString().padStart(2, '0');
-    return `${minutes}:${seconds}`;
   }
 
   function formatBytes(bytes) {
@@ -276,7 +232,7 @@
     async function handle(message) {
       try {
         if (message?.type === 'asset-start') {
-          if (!['home', 'away', 'league'].includes(message.side)) return true;
+          if (!['home', 'away'].includes(message.side)) return true;
           const totalChunks = Math.max(1, Number.parseInt(message.totalChunks, 10) || 1);
           transfers.set(message.transferId, {
             purpose: message.purpose || 'logo',
@@ -387,7 +343,6 @@
 
   window.OverlayCore = Object.freeze({
     PROTOCOL,
-    PERIOD_OPTIONS,
     parseFragment,
     encodeJson,
     decodeJson,
@@ -401,12 +356,9 @@
     verifyChallenge,
     buildUrl,
     copyText,
-    clampInt,
     clampScore,
     normalizeState,
     sanitizePatch,
-    getClockRemaining,
-    formatClock,
     formatBytes,
     sendBlob,
     createAssetReceiver,

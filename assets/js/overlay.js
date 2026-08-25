@@ -1,44 +1,34 @@
-import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/trystero@0.25.3/+esm';
-
 (() => {
   'use strict';
 
-  const APP_ID = 'grupa-format-match-overlay-v31';
   const params = OverlayCore.parseFragment();
   const previewMode = params.preview === '1';
-  const roomId = params.room || '';
+  const room = params.room || '';
   const publicToken = params.pk || '';
-
-  const shell = document.querySelector('#overlay-shell');
-  const leagueStrip = document.querySelector('#league-strip');
+  const root = document.querySelector('#scoreboard');
   const debug = document.querySelector('#overlay-error');
 
   const state = OverlayCore.normalizeState();
-  const logoBlobs = { home: null, away: null, league: null };
-  const logoUrls = { home: '', away: '', league: '' };
-  const acceptedPeers = new Set();
-  const peerHandshakeData = new Map();
-
+  const logoBlobs = { home: null, away: null };
+  const logoUrls = { home: '', away: '' };
+  let peer = null;
+  let activeConnection = null;
   let publicKey = null;
-  let room = null;
-  let actions = null;
-  let renderInterval = null;
-
-  function relayCount() {
-    try {
-      return Object.values(getRelaySockets?.() || {}).filter((socket) => socket?.readyState === WebSocket.OPEN).length;
-    } catch (_) {
-      return 0;
-    }
-  }
 
   function initials(name) {
-    return String(name || '?').trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || '?';
+    return String(name || '?')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0])
+      .join('')
+      .toUpperCase() || '?';
   }
 
   function setLogo(side, source) {
-    const image = side === 'league' ? document.querySelector('#league-logo') : document.querySelector(`#${side}-team-logo`);
-    const fallback = side === 'league' ? null : document.querySelector(`#${side}-fallback`);
+    const image = document.querySelector(`#${side}-team-logo`);
+    const fallback = document.querySelector(`#${side}-fallback`);
     if (logoUrls[side] && logoUrls[side].startsWith('blob:')) URL.revokeObjectURL(logoUrls[side]);
     logoUrls[side] = '';
 
@@ -55,48 +45,30 @@ import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/
     if (logoUrls[side]) {
       image.src = logoUrls[side];
       image.hidden = false;
-      if (fallback) fallback.hidden = true;
+      fallback.hidden = true;
     } else {
       image.removeAttribute('src');
       image.hidden = true;
-      if (fallback) fallback.hidden = false;
+      fallback.hidden = false;
     }
   }
 
   function renderTeam(side) {
     const name = state[`${side}_name`];
+    const score = state[`${side}_score`];
     document.querySelector(`#${side}-team-name`).textContent = name;
-    document.querySelector(`#${side}-team-score`).textContent = state[`${side}_score`];
+    document.querySelector(`#${side}-team-score`).textContent = score;
     document.querySelector(`#${side}-fallback`).textContent = initials(name);
-  }
-
-  function renderLeague() {
-    const showLogo = state.show_league_logo && !!logoUrls.league;
-    const showName = state.show_league_name && !!state.league_name.trim();
-    const logoBox = document.querySelector('#league-logo-box');
-    const leagueName = document.querySelector('#league-name');
-    logoBox.hidden = !showLogo;
-    leagueName.hidden = !showName;
-    leagueName.textContent = state.league_name || 'VRFS';
-    leagueStrip.hidden = !showLogo && !showName;
-  }
-
-  function renderClock() {
-    document.querySelector('#match-period').textContent = state.clock_period;
-    document.querySelector('#match-clock').textContent = OverlayCore.formatClock(OverlayCore.getClockRemaining(state));
   }
 
   function render() {
     renderTeam('home');
     renderTeam('away');
-    renderLeague();
-    renderClock();
-    shell.style.setProperty('--overlay-width', `${state.overlay_width}px`);
-    shell.classList.add('is-ready');
+    root.classList.add('is-ready');
   }
 
   function showError(message) {
-    console.warn(message);
+    console.error(message);
     debug.textContent = message;
     debug.hidden = false;
   }
@@ -107,40 +79,48 @@ import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/
   }
 
   async function persistState() {
-    try { await OverlayCore.storageSet(`${roomId}:state`, { ...state }); }
-    catch (error) { console.warn('Nie udało się zapisać stanu:', error); }
+    try {
+      await OverlayCore.storageSet(`${room}:state`, { ...state });
+    } catch (error) {
+      console.warn('Nie udało się zapisać stanu lokalnie:', error);
+    }
   }
 
   async function persistLogo(side, blob) {
     try {
-      if (blob) await OverlayCore.storageSet(`${roomId}:logo:${side}`, blob);
-      else await OverlayCore.storageDelete(`${roomId}:logo:${side}`);
-    } catch (error) { console.warn('Nie udało się zapisać logo:', error); }
+      if (blob) await OverlayCore.storageSet(`${room}:logo:${side}`, blob);
+      else await OverlayCore.storageDelete(`${room}:logo:${side}`);
+    } catch (error) {
+      console.warn('Nie udało się zapisać logo lokalnie:', error);
+    }
   }
 
   async function loadLocalState() {
     try {
-      const savedState = await OverlayCore.storageGet(`${roomId}:state`);
+      const savedState = await OverlayCore.storageGet(`${room}:state`);
       if (savedState) Object.assign(state, OverlayCore.normalizeState(savedState));
-      for (const side of ['home', 'away', 'league']) {
-        const blob = await OverlayCore.storageGet(`${roomId}:logo:${side}`);
+      for (const side of ['home', 'away']) {
+        const blob = await OverlayCore.storageGet(`${room}:logo:${side}`);
         if (blob instanceof Blob) setLogo(side, blob);
       }
-    } catch (error) { console.warn('Nie udało się odczytać lokalnego stanu:', error); }
+    } catch (error) {
+      console.warn('Nie udało się odczytać lokalnego stanu:', error);
+    }
     render();
   }
 
-  async function sendStoredLogos(peerId, knownLogos = {}) {
-    for (const side of ['home', 'away', 'league']) {
+  async function sendStoredLogos(conn, knownLogos = {}) {
+    for (const side of ['home', 'away']) {
       if (knownLogos?.[side]) continue;
       const blob = logoBlobs[side];
-      if (!(blob instanceof Blob)) continue;
-      try {
-        await actions.logo.send(blob, {
-          target: peerId,
-          metadata: { side, name: `${side}-logo`, mime: blob.type || 'application/octet-stream', size: blob.size }
-        });
-      } catch (error) { console.warn('Nie udało się zsynchronizować logo:', error); }
+      if (blob instanceof Blob && conn?.open) {
+        try {
+          await OverlayCore.sendBlob(conn, side, blob, { purpose: 'sync-logo', name: `${side}-logo` });
+        } catch (error) {
+          console.warn('Nie udało się zsynchronizować logo z panelem:', error);
+          return;
+        }
+      }
     }
   }
 
@@ -150,141 +130,103 @@ import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/
       const message = event.data;
       if (!message || message.type !== 'overlay-preview') return;
       Object.assign(state, OverlayCore.normalizeState(message.state));
-      for (const side of ['home', 'away', 'league']) {
-        if (Object.prototype.hasOwnProperty.call(message.logos || {}, side)) setLogo(side, message.logos[side] || '');
-      }
+      if (Object.prototype.hasOwnProperty.call(message.logos || {}, 'home')) setLogo('home', message.logos.home || '');
+      if (Object.prototype.hasOwnProperty.call(message.logos || {}, 'away')) setLogo('away', message.logos.away || '');
       render();
     });
     render();
     window.parent?.postMessage({ type: 'overlay-preview-ready' }, window.location.origin);
   }
 
-  async function overlayHandshake(peerId, send, receive) {
-    await send({
-      type: 'match-overlay-handshake',
-      role: 'overlay',
-      protocol: OverlayCore.PROTOCOL
-    });
-
-    const { data: hello } = await receive();
-    if (hello?.type !== 'match-overlay-handshake' || hello?.role !== 'control' || hello?.protocol !== OverlayCore.PROTOCOL) {
-      throw new Error('Odrzucono peer, który nie jest panelem sterowania.');
-    }
-
+  async function setupConnection(conn) {
     const nonce = OverlayCore.randomHex(32);
-    await send({ type: 'auth-challenge', nonce });
+    let authenticated = false;
 
-    const { data: proof } = await receive();
-    if (proof?.type !== 'auth-proof' || proof?.nonce !== nonce || !proof?.signature) {
-      throw new Error('Panel nie przesłał poprawnego dowodu autoryzacji.');
-    }
-
-    const ok = await OverlayCore.verifyChallenge(publicKey, roomId, nonce, proof.signature, selfId);
-    if (!ok) throw new Error('Nieprawidłowy podpis prywatnego panelu.');
-
-    peerHandshakeData.set(peerId, { knownLogos: proof.knownLogos || {} });
-
-    await send({
-      type: 'auth-ok',
-      nonce,
-      state: { ...state },
-      logoPresence: { home: !!logoUrls.home, away: !!logoUrls.away, league: !!logoUrls.league }
+    const receiver = OverlayCore.createAssetReceiver({
+      onComplete: async ({ side, blob, transferId }) => {
+        if (!authenticated) return;
+        setLogo(side, blob);
+        await persistLogo(side, blob);
+        conn.send({ type: 'asset-ack', side, transferId, size: blob.size });
+      },
+      onError: (error) => console.error('Błąd odbioru logo:', error)
     });
-  }
 
-  function setupActions() {
-    actions = {
-      patch: room.makeAction('patch'),
-      state: room.makeAction('state'),
-      logo: room.makeAction('logo'),
-      logoRemove: room.makeAction('logo-rm'),
-      logoAck: room.makeAction('logo-ack'),
-      requestState: room.makeAction('req-state')
-    };
+    conn.on('open', () => {
+      conn.send({ type: 'challenge', protocol: OverlayCore.PROTOCOL, room, nonce });
+    });
 
-    actions.patch.onMessage = async (incoming, { peerId }) => {
-      if (!acceptedPeers.has(peerId)) return;
-      const patch = OverlayCore.sanitizePatch(incoming);
-      Object.assign(state, patch);
-      render();
-      await persistState();
-      await actions.state.send({ ...state }, { target: peerId });
-    };
+    conn.on('data', async (message) => {
+      try {
+        if (!authenticated) {
+          if (message?.type !== 'auth' || message.nonce !== nonce) return;
+          const ok = await OverlayCore.verifyChallenge(publicKey, room, nonce, message.signature || '');
+          if (!ok) {
+            conn.send({ type: 'auth-failed' });
+            conn.close();
+            return;
+          }
 
-    actions.logo.onMessage = async (data, { peerId, metadata }) => {
-      if (!acceptedPeers.has(peerId)) return;
-      const side = metadata?.side;
-      if (!['home', 'away', 'league'].includes(side)) return;
-      const blob = data instanceof Blob ? data : new Blob([data], { type: metadata?.mime || 'application/octet-stream' });
-      setLogo(side, blob);
-      render();
-      await persistLogo(side, blob);
-      await actions.logoAck.send({ ok: true, side, size: blob.size }, { target: peerId });
-    };
-
-    actions.logoRemove.onMessage = async (data, { peerId }) => {
-      if (!acceptedPeers.has(peerId)) return;
-      const side = data?.side;
-      if (!['home', 'away', 'league'].includes(side)) return;
-      setLogo(side, null);
-      render();
-      await persistLogo(side, null);
-      await actions.logoAck.send({ ok: true, side, removed: true }, { target: peerId });
-    };
-
-    actions.requestState.onMessage = async (data, { peerId }) => {
-      if (!acceptedPeers.has(peerId)) return;
-      await actions.state.send({ ...state }, { target: peerId });
-      await sendStoredLogos(peerId, data?.knownLogos || {});
-    };
-  }
-
-  async function initNetwork() {
-    room = joinRoom({
-      appId: APP_ID,
-      password: publicToken,
-      relayConfig: { redundancy: 5, warnOnRelayFailure: false },
-      trickleIce: true
-    }, roomId, {
-      handshakeTimeoutMs: 12000,
-      onPeerHandshake: overlayHandshake,
-      onJoinError: ({ error, peerId }) => {
-        const message = String(error?.message || error || 'nieznany błąd');
-        console.warn('Trystero OBS join error:', peerId, message);
-        // Nie zasłaniaj transmisji błędem po pojedynczej odrzuconej próbie.
-        // Pokazujemy błąd tylko gdy nie ma żadnego poprawnie połączonego panelu.
-        if (!acceptedPeers.size && !/handshake|auth|rejected|odrzu|podpis/i.test(message)) {
-          showError(`P2P: ${message}`);
+          authenticated = true;
+          if (activeConnection && activeConnection !== conn && activeConnection.open) activeConnection.close();
+          activeConnection = conn;
+          clearError();
+          conn.send({
+            type: 'auth-ok',
+            state: { ...state },
+            logoPresence: { home: logoBlobs.home instanceof Blob, away: logoBlobs.away instanceof Blob }
+          });
+          void sendStoredLogos(conn, message.knownLogos || {});
+          return;
         }
+
+        if (await receiver.handle(message)) return;
+
+        if (message?.type === 'patch') {
+          const patch = OverlayCore.sanitizePatch(message.patch);
+          Object.assign(state, patch);
+          render();
+          await persistState();
+          conn.send({ type: 'state', state: { ...state } });
+          return;
+        }
+
+        if (message?.type === 'logo-remove' && ['home', 'away'].includes(message.side)) {
+          setLogo(message.side, null);
+          await persistLogo(message.side, null);
+          conn.send({ type: 'logo-removed', side: message.side });
+          return;
+        }
+
+        if (message?.type === 'request-state') {
+          conn.send({ type: 'state', state: { ...state } });
+          void sendStoredLogos(conn);
+        }
+      } catch (error) {
+        console.error(error);
       }
     });
 
-    setupActions();
+    conn.on('close', () => {
+      receiver.clear();
+      if (activeConnection === conn) activeConnection = null;
+    });
 
-    room.onPeerJoin = (peerId) => {
-      acceptedPeers.add(peerId);
-      clearError();
-      const handshake = peerHandshakeData.get(peerId) || {};
-      peerHandshakeData.delete(peerId);
-      void sendStoredLogos(peerId, handshake.knownLogos || {});
-    };
-
-    room.onPeerLeave = (peerId) => {
-      acceptedPeers.delete(peerId);
-      peerHandshakeData.delete(peerId);
-    };
+    conn.on('error', (error) => console.warn('Błąd połączenia kontrolera:', error));
   }
 
   async function init() {
-    renderInterval = setInterval(renderClock, 250);
-
     if (previewMode) {
       setupPreviewMode();
       return;
     }
 
-    if (!roomId || !publicToken) {
+    if (!room || !publicToken) {
       showError('Nieprawidłowy link overlayu: brakuje pokoju lub klucza publicznego.');
+      return;
+    }
+    if (!window.Peer) {
+      showError('Nie udało się załadować modułu połączenia P2P.');
       return;
     }
 
@@ -292,19 +234,31 @@ import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/
 
     try {
       publicKey = await OverlayCore.importPublicKey(publicToken);
-      clearError();
-      await initNetwork();
+      peer = new Peer(OverlayCore.peerIdForRoom(room));
+
+      peer.on('open', () => clearError());
+      peer.on('connection', (conn) => void setupConnection(conn));
+      peer.on('disconnected', () => {
+        if (!activeConnection?.open) showError('Utracono serwer sygnalizacyjny. Ponawiam połączenie…');
+        try { peer.reconnect(); } catch (_) {}
+      });
+      peer.on('error', (error) => {
+        if (error?.type === 'unavailable-id') {
+          showError('Ten link overlayu jest już otwarty w innym OBS/przeglądarce. Zamknij drugą kopię.');
+        } else {
+          showError(`P2P: ${error?.message || error}`);
+        }
+      });
     } catch (error) {
       showError(`Nie udało się uruchomić overlayu: ${error.message || error}`);
     }
   }
 
   window.addEventListener('beforeunload', () => {
-    clearInterval(renderInterval);
-    for (const side of ['home', 'away', 'league']) {
+    for (const side of ['home', 'away']) {
       if (logoUrls[side]?.startsWith('blob:')) URL.revokeObjectURL(logoUrls[side]);
     }
-    try { room?.leave?.(); } catch (_) {}
+    try { peer?.destroy(); } catch (_) {}
   }, { once: true });
 
   void init();

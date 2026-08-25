@@ -4,51 +4,37 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net wss:; img-src 'self' data: blob:; style-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; connect-src 'self' https://0.peerjs.com wss://0.peerjs.com; img-src 'self' data: blob:; style-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Match Overlay</title>
-  <link rel="stylesheet" href="assets/css/overlay.css?v=20260825-4">
+  <link rel="stylesheet" href="assets/css/overlay.css">
 </head>
 <body>
-  <main id="overlay-shell" class="overlay-shell" aria-label="Nakładka meczowa">
-    <section id="league-strip" class="league-strip">
-      <div class="league-chip">
-        <div id="league-logo-box" class="league-logo-box">
-          <img id="league-logo" class="league-logo" alt="">
-        </div>
-        <span id="league-name" class="league-name">VRFS</span>
+  <main id="scoreboard" class="scoreboard" aria-label="Wynik meczu">
+    <section class="team home">
+      <div class="logo-box">
+        <img id="home-team-logo" class="team-logo" alt="" hidden>
+        <span id="home-fallback" class="logo-fallback">G</span>
       </div>
+      <span id="home-team-name" class="team-name">GOSPODARZE</span>
+      <strong id="home-team-score" class="team-score">0</strong>
     </section>
 
-    <section id="scoreboard" class="scoreboard" aria-label="Wynik meczu">
-      <section class="team home">
-        <div class="logo-box">
-          <img id="home-team-logo" class="team-logo" alt="" hidden>
-          <span id="home-fallback" class="logo-fallback">G</span>
-        </div>
-        <span id="home-team-name" class="team-name">GOSPODARZE</span>
-        <strong id="home-team-score" class="team-score">0</strong>
-      </section>
+    <div class="score-divider" aria-hidden="true">:</div>
 
-      <div class="score-divider" aria-hidden="true">:</div>
-
-      <section class="team away">
-        <strong id="away-team-score" class="team-score">0</strong>
-        <span id="away-team-name" class="team-name">GOŚCIE</span>
-        <div class="logo-box">
-          <img id="away-team-logo" class="team-logo" alt="" hidden>
-          <span id="away-fallback" class="logo-fallback">G</span>
-        </div>
-      </section>
-    </section>
-
-    <section id="match-meta" class="match-meta" aria-label="Informacje o meczu">
-      <div id="match-period" class="meta-pill">1st half</div>
-      <div id="match-clock" class="clock-pill">15:00</div>
+    <section class="team away">
+      <strong id="away-team-score" class="team-score">0</strong>
+      <span id="away-team-name" class="team-name">GOŚCIE</span>
+      <div class="logo-box">
+        <img id="away-team-logo" class="team-logo" alt="" hidden>
+        <span id="away-fallback" class="logo-fallback">G</span>
+      </div>
     </section>
   </main>
 
   <div id="overlay-error" class="overlay-error" hidden></div>
-  <script src="assets/js/core.js?v=20260825-4"></script>
-  <script type="module" src="assets/js/overlay.js?v=20260825-4"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha512-XEKeWX+mI3Ov+tg2evDlVQFzVOIp4T8J3cNcCEPaEUGpxJV3eZaN8rHuvnFPvQpGJBHPmrozJDMpm2xcDvtmyQ==" crossorigin="anonymous"></script>
+  <script src="assets/js/core.js"></script>
+  <script src="assets/js/overlay.js"></script>
 </body>
 </html>
