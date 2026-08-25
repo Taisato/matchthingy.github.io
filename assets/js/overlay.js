@@ -19,6 +19,7 @@
   let publicKey = null;
   let timerInterval = null;
   let timerCompletionPending = false;
+  let signalingReconnectTimer = null;
 
   function initials(name) {
     return String(name || '?')
@@ -132,7 +133,21 @@
       })().finally(() => {
         timerCompletionPending = false;
       });
-    }, 200);
+    }, 250);
+  }
+
+  function scheduleSignalingReconnect(delay = 800) {
+    clearTimeout(signalingReconnectTimer);
+    signalingReconnectTimer = setTimeout(() => {
+      signalingReconnectTimer = null;
+      if (!peer || peer.destroyed || !peer.disconnected) return;
+      try {
+        peer.reconnect();
+      } catch (error) {
+        console.warn('Nie udało się ponowić sygnalizacji PeerJS:', error);
+      }
+      if (peer?.disconnected && !peer.destroyed) scheduleSignalingReconnect(1800);
+    }, delay);
   }
 
   async function persistLogo(side, blob) {
@@ -265,10 +280,9 @@
   }
 
   async function init() {
-    startTimerLoop();
-
     if (previewMode) {
       setupPreviewMode();
+      startTimerLoop();
       return;
     }
 
@@ -287,11 +301,15 @@
       publicKey = await OverlayCore.importPublicKey(publicToken);
       peer = new Peer(OverlayCore.peerIdForRoom(room));
 
-      peer.on('open', () => clearError());
+      peer.on('open', () => {
+        clearTimeout(signalingReconnectTimer);
+        signalingReconnectTimer = null;
+        clearError();
+      });
       peer.on('connection', (conn) => void setupConnection(conn));
       peer.on('disconnected', () => {
         if (!activeConnection?.open) showError('Utracono serwer sygnalizacyjny. Ponawiam połączenie…');
-        try { peer.reconnect(); } catch (_) {}
+        scheduleSignalingReconnect();
       });
       peer.on('error', (error) => {
         if (error?.type === 'unavailable-id') {
@@ -300,6 +318,9 @@
           showError(`P2P: ${error?.message || error}`);
         }
       });
+
+      // Timer nie konkuruje z inicjalizacją PeerJS o pierwszą klatkę/event loop w OBS.
+      startTimerLoop();
     } catch (error) {
       showError(`Nie udało się uruchomić overlayu: ${error.message || error}`);
     }
@@ -307,6 +328,7 @@
 
   window.addEventListener('beforeunload', () => {
     clearInterval(timerInterval);
+    clearTimeout(signalingReconnectTimer);
     for (const side of ['home', 'away']) {
       if (logoUrls[side]?.startsWith('blob:')) URL.revokeObjectURL(logoUrls[side]);
     }
