@@ -3,7 +3,7 @@ import { joinRoom, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/trystero
 (() => {
   'use strict';
 
-  const APP_ID = 'grupa-format-match-overlay-v3';
+  const APP_ID = 'grupa-format-match-overlay-v31';
   const params = OverlayCore.parseFragment();
   const roomId = params.room || '';
   const privateToken = params.sk || '';
@@ -34,7 +34,8 @@ import { joinRoom, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/trystero
   let overlayPeerId = '';
   let authenticated = false;
   let uiInterval = null;
-  let discoveryInterval = null;
+  const connectedOverlays = new Set();
+  const handshakeSync = new Map();
   let relayInterval = null;
   let actions = null;
 
@@ -149,9 +150,8 @@ import { joinRoom, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/trystero
     if (canSend()) {
       void actions.patch.send(sanitized, { target: overlayPeerId }).catch((error) => {
         console.warn('Patch send failed:', error);
-        authenticated = false;
         queuePatch(sanitized);
-        setStatus('Połączenie z OBS przerwane • ponawiam automatycznie', 'warning');
+        setStatus('Nie udało się wysłać zmiany • czekam na potwierdzenie połączenia', 'warning');
       });
       if (!silent) setStatus('Połączono z OBS • zmiana wysłana', 'ok');
     } else {
@@ -366,64 +366,52 @@ import { joinRoom, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/trystero
     });
   }
 
-  async function announce() {
-    if (!actions) return;
-    try {
-      await actions.hello.send({ role: 'control', protocol: OverlayCore.PROTOCOL });
-    } catch (_) {}
+  async function controlHandshake(peerId, send, receive) {
+    setStatus('OBS znaleziony • bezpieczna autoryzacja…', 'neutral');
+
+    await send({
+      type: 'match-overlay-handshake',
+      role: 'control',
+      protocol: OverlayCore.PROTOCOL
+    });
+
+    const { data: hello } = await receive();
+    if (hello?.type !== 'match-overlay-handshake' || hello?.role !== 'overlay' || hello?.protocol !== OverlayCore.PROTOCOL) {
+      throw new Error('Odrzucono peer, który nie jest overlayem OBS.');
+    }
+
+    const { data: challenge } = await receive();
+    if (challenge?.type !== 'auth-challenge' || !challenge?.nonce) {
+      throw new Error('Overlay nie wysłał poprawnego wyzwania autoryzacyjnego.');
+    }
+
+    const signature = await OverlayCore.signChallenge(privateKey, roomId, challenge.nonce, peerId);
+    await send({
+      type: 'auth-proof',
+      nonce: challenge.nonce,
+      signature,
+      knownLogos: { home: !!logoUrls.home, away: !!logoUrls.away, league: !!logoUrls.league }
+    });
+
+    const { data: accepted } = await receive();
+    if (accepted?.type !== 'auth-ok' || accepted?.nonce !== challenge.nonce) {
+      throw new Error('Overlay nie potwierdził autoryzacji.');
+    }
+
+    handshakeSync.set(peerId, {
+      state: accepted.state ? OverlayCore.normalizeState(accepted.state) : null,
+      logoPresence: accepted.logoPresence || {}
+    });
   }
 
   function setupActions() {
     actions = {
-      hello: room.makeAction('hello'),
-      challenge: room.makeAction('challenge'),
-      auth: room.makeAction('auth'),
-      authOk: room.makeAction('auth-ok'),
       patch: room.makeAction('patch'),
       state: room.makeAction('state'),
       logo: room.makeAction('logo'),
       logoRemove: room.makeAction('logo-rm'),
       logoAck: room.makeAction('logo-ack'),
       requestState: room.makeAction('req-state')
-    };
-
-    actions.hello.onMessage = (data, { peerId }) => {
-      if (data?.role !== 'overlay') return;
-      if (overlayPeerId && overlayPeerId !== peerId && authenticated) return;
-      overlayPeerId = peerId;
-      authenticated = false;
-      setStatus('OBS znaleziony • autoryzuję prywatny panel…', 'neutral');
-    };
-
-    actions.challenge.onMessage = async (data, { peerId }) => {
-      if (!data?.nonce) return;
-      if (overlayPeerId && overlayPeerId !== peerId && authenticated) return;
-      overlayPeerId = peerId;
-      try {
-        const signature = await OverlayCore.signChallenge(privateKey, roomId, data.nonce, peerId);
-        await actions.auth.send({
-          nonce: data.nonce,
-          signature,
-          knownLogos: { home: !!logoUrls.home, away: !!logoUrls.away, league: !!logoUrls.league }
-        }, { target: peerId });
-        setStatus('OBS znaleziony • sprawdzam podpis…', 'neutral');
-      } catch (error) {
-        setStatus(`Błąd autoryzacji: ${error.message || error}`, 'error');
-      }
-    };
-
-    actions.authOk.onMessage = async (data, { peerId }) => {
-      if (peerId !== overlayPeerId) return;
-      authenticated = true;
-      if (data?.state) Object.assign(state, OverlayCore.normalizeState(data.state));
-      applyStateToInputs();
-      setStatus(`Połączono z OBS • P2P aktywne${relayCount() ? ` • relaye: ${relayCount()}` : ''}`, 'ok');
-      await flushQueue();
-      for (const side of ['home', 'away', 'league']) {
-        if (localLogoPreferred[side] && logoBlobs[side] instanceof Blob && !data?.logoPresence?.[side]) {
-          await sendLogo(side, logoBlobs[side], `${side}-logo`);
-        }
-      }
     };
 
     actions.state.onMessage = (incoming, { peerId }) => {
@@ -452,6 +440,34 @@ import { joinRoom, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/trystero
     };
   }
 
+  async function activateOverlay(peerId) {
+    connectedOverlays.add(peerId);
+    if (overlayPeerId && overlayPeerId !== peerId && authenticated) return;
+
+    overlayPeerId = peerId;
+    authenticated = true;
+
+    const sync = handshakeSync.get(peerId) || {};
+    handshakeSync.delete(peerId);
+    if (sync.state) Object.assign(state, OverlayCore.normalizeState(sync.state));
+    applyStateToInputs();
+
+    let latencyText = '';
+    try {
+      const latency = await room.ping(peerId);
+      if (Number.isFinite(latency)) latencyText = ` • ${Math.round(latency)} ms`;
+    } catch (_) {}
+
+    setStatus(`Połączono z OBS • P2P aktywne${latencyText}`, 'ok');
+    await flushQueue();
+
+    for (const side of ['home', 'away', 'league']) {
+      if (localLogoPreferred[side] && logoBlobs[side] instanceof Blob && !sync.logoPresence?.[side]) {
+        await sendLogo(side, logoBlobs[side], `${side}-logo`);
+      }
+    }
+  }
+
   async function initNetwork() {
     room = joinRoom({
       appId: APP_ID,
@@ -459,38 +475,49 @@ import { joinRoom, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/trystero
       relayConfig: { redundancy: 5, warnOnRelayFailure: false },
       trickleIce: true
     }, roomId, {
-      onJoinError: ({ error }) => {
-        console.warn('Trystero join error:', error);
-        if (!authenticated) setStatus(`P2P nie zestawiło połączenia: ${error?.message || error}`, 'warning');
+      handshakeTimeoutMs: 12000,
+      onPeerHandshake: controlHandshake,
+      onJoinError: ({ error, peerId }) => {
+        console.warn('Trystero join error:', peerId, error);
+        if (!authenticated) {
+          const message = String(error?.message || error || 'nieznany błąd');
+          if (/handshake|timeout|auth|rejected|odrzu/i.test(message)) {
+            setStatus('Nie udało się autoryzować OBS • ponawiam połączenie', 'warning');
+          } else {
+            setStatus(`Nie udało się zestawić P2P: ${message}`, 'warning');
+          }
+        }
       }
     });
 
     setupActions();
 
     room.onPeerJoin = (peerId) => {
-      void actions.hello.send({ role: 'control', protocol: OverlayCore.PROTOCOL }, { target: peerId });
+      void activateOverlay(peerId);
     };
 
     room.onPeerLeave = (peerId) => {
+      connectedOverlays.delete(peerId);
+      handshakeSync.delete(peerId);
       if (peerId !== overlayPeerId) return;
+
       overlayPeerId = '';
       authenticated = false;
-      setStatus('OBS offline • czekam na ponowne połączenie', 'warning');
-    };
 
-    discoveryInterval = setInterval(() => {
-      if (!authenticated) void announce();
-    }, 2500);
+      const replacement = connectedOverlays.values().next().value;
+      if (replacement) {
+        void activateOverlay(replacement);
+      } else {
+        setStatus('OBS offline • czekam na ponowne połączenie', 'warning');
+      }
+    };
 
     relayInterval = setInterval(() => {
       if (authenticated) return;
       const count = relayCount();
-      if (overlayPeerId) setStatus('OBS znaleziony • trwa autoryzacja…', 'neutral');
-      else if (count) setStatus(`Sieć P2P online • relaye: ${count} • oczekiwanie na OBS`, 'neutral');
+      if (count) setStatus(`Sieć P2P online • relaye: ${count} • oczekiwanie na OBS`, 'neutral');
       else setStatus('Łączenie z siecią sygnalizacyjną…', 'neutral');
-    }, 1500);
-
-    void announce();
+    }, 1800);
   }
 
   async function init() {
@@ -542,7 +569,6 @@ import { joinRoom, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/trystero
 
   window.addEventListener('beforeunload', () => {
     clearInterval(uiInterval);
-    clearInterval(discoveryInterval);
     clearInterval(relayInterval);
     for (const timer of pendingTimers.values()) clearTimeout(timer);
     for (const side of ['home', 'away', 'league']) {

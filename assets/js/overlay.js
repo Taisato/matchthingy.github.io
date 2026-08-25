@@ -3,7 +3,7 @@ import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/
 (() => {
   'use strict';
 
-  const APP_ID = 'grupa-format-match-overlay-v3';
+  const APP_ID = 'grupa-format-match-overlay-v31';
   const params = OverlayCore.parseFragment();
   const previewMode = params.preview === '1';
   const roomId = params.room || '';
@@ -16,14 +16,13 @@ import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/
   const state = OverlayCore.normalizeState();
   const logoBlobs = { home: null, away: null, league: null };
   const logoUrls = { home: '', away: '', league: '' };
-  const authenticatedPeers = new Set();
-  const pendingChallenges = new Map();
+  const acceptedPeers = new Set();
+  const peerHandshakeData = new Map();
 
   let publicKey = null;
   let room = null;
   let actions = null;
   let renderInterval = null;
-  let announceInterval = null;
 
   function relayCount() {
     try {
@@ -160,20 +159,41 @@ import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/
     window.parent?.postMessage({ type: 'overlay-preview-ready' }, window.location.origin);
   }
 
-  async function sendChallenge(peerId) {
+  async function overlayHandshake(peerId, send, receive) {
+    await send({
+      type: 'match-overlay-handshake',
+      role: 'overlay',
+      protocol: OverlayCore.PROTOCOL
+    });
+
+    const { data: hello } = await receive();
+    if (hello?.type !== 'match-overlay-handshake' || hello?.role !== 'control' || hello?.protocol !== OverlayCore.PROTOCOL) {
+      throw new Error('Odrzucono peer, który nie jest panelem sterowania.');
+    }
+
     const nonce = OverlayCore.randomHex(32);
-    pendingChallenges.set(peerId, nonce);
-    try {
-      await actions.challenge.send({ nonce }, { target: peerId });
-    } catch (_) {}
+    await send({ type: 'auth-challenge', nonce });
+
+    const { data: proof } = await receive();
+    if (proof?.type !== 'auth-proof' || proof?.nonce !== nonce || !proof?.signature) {
+      throw new Error('Panel nie przesłał poprawnego dowodu autoryzacji.');
+    }
+
+    const ok = await OverlayCore.verifyChallenge(publicKey, roomId, nonce, proof.signature, selfId);
+    if (!ok) throw new Error('Nieprawidłowy podpis prywatnego panelu.');
+
+    peerHandshakeData.set(peerId, { knownLogos: proof.knownLogos || {} });
+
+    await send({
+      type: 'auth-ok',
+      nonce,
+      state: { ...state },
+      logoPresence: { home: !!logoUrls.home, away: !!logoUrls.away, league: !!logoUrls.league }
+    });
   }
 
   function setupActions() {
     actions = {
-      hello: room.makeAction('hello'),
-      challenge: room.makeAction('challenge'),
-      auth: room.makeAction('auth'),
-      authOk: room.makeAction('auth-ok'),
       patch: room.makeAction('patch'),
       state: room.makeAction('state'),
       logo: room.makeAction('logo'),
@@ -182,31 +202,8 @@ import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/
       requestState: room.makeAction('req-state')
     };
 
-    actions.hello.onMessage = (data, { peerId }) => {
-      if (data?.role !== 'control') return;
-      void actions.hello.send({ role: 'overlay', protocol: OverlayCore.PROTOCOL }, { target: peerId });
-      if (!authenticatedPeers.has(peerId)) void sendChallenge(peerId);
-    };
-
-    actions.auth.onMessage = async (data, { peerId }) => {
-      const expectedNonce = pendingChallenges.get(peerId);
-      if (!expectedNonce || data?.nonce !== expectedNonce || !data?.signature) return;
-      pendingChallenges.delete(peerId);
-      try {
-        const ok = await OverlayCore.verifyChallenge(publicKey, roomId, expectedNonce, data.signature, selfId);
-        if (!ok) return;
-        authenticatedPeers.add(peerId);
-        clearError();
-        await actions.authOk.send({
-          state: { ...state },
-          logoPresence: { home: !!logoUrls.home, away: !!logoUrls.away, league: !!logoUrls.league }
-        }, { target: peerId });
-        await sendStoredLogos(peerId, data?.knownLogos || {});
-      } catch (error) { console.warn('Auth verify error:', error); }
-    };
-
     actions.patch.onMessage = async (incoming, { peerId }) => {
-      if (!authenticatedPeers.has(peerId)) return;
+      if (!acceptedPeers.has(peerId)) return;
       const patch = OverlayCore.sanitizePatch(incoming);
       Object.assign(state, patch);
       render();
@@ -215,7 +212,7 @@ import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/
     };
 
     actions.logo.onMessage = async (data, { peerId, metadata }) => {
-      if (!authenticatedPeers.has(peerId)) return;
+      if (!acceptedPeers.has(peerId)) return;
       const side = metadata?.side;
       if (!['home', 'away', 'league'].includes(side)) return;
       const blob = data instanceof Blob ? data : new Blob([data], { type: metadata?.mime || 'application/octet-stream' });
@@ -226,7 +223,7 @@ import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/
     };
 
     actions.logoRemove.onMessage = async (data, { peerId }) => {
-      if (!authenticatedPeers.has(peerId)) return;
+      if (!acceptedPeers.has(peerId)) return;
       const side = data?.side;
       if (!['home', 'away', 'league'].includes(side)) return;
       setLogo(side, null);
@@ -236,7 +233,7 @@ import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/
     };
 
     actions.requestState.onMessage = async (data, { peerId }) => {
-      if (!authenticatedPeers.has(peerId)) return;
+      if (!acceptedPeers.has(peerId)) return;
       await actions.state.send({ ...state }, { target: peerId });
       await sendStoredLogos(peerId, data?.knownLogos || {});
     };
@@ -249,28 +246,33 @@ import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/
       relayConfig: { redundancy: 5, warnOnRelayFailure: false },
       trickleIce: true
     }, roomId, {
-      onJoinError: ({ error }) => {
-        console.warn('Trystero OBS join error:', error);
-        showError(`P2P: ${error?.message || error}`);
+      handshakeTimeoutMs: 12000,
+      onPeerHandshake: overlayHandshake,
+      onJoinError: ({ error, peerId }) => {
+        const message = String(error?.message || error || 'nieznany błąd');
+        console.warn('Trystero OBS join error:', peerId, message);
+        // Nie zasłaniaj transmisji błędem po pojedynczej odrzuconej próbie.
+        // Pokazujemy błąd tylko gdy nie ma żadnego poprawnie połączonego panelu.
+        if (!acceptedPeers.size && !/handshake|auth|rejected|odrzu|podpis/i.test(message)) {
+          showError(`P2P: ${message}`);
+        }
       }
     });
 
     setupActions();
 
     room.onPeerJoin = (peerId) => {
-      void actions.hello.send({ role: 'overlay', protocol: OverlayCore.PROTOCOL }, { target: peerId });
+      acceptedPeers.add(peerId);
+      clearError();
+      const handshake = peerHandshakeData.get(peerId) || {};
+      peerHandshakeData.delete(peerId);
+      void sendStoredLogos(peerId, handshake.knownLogos || {});
     };
+
     room.onPeerLeave = (peerId) => {
-      authenticatedPeers.delete(peerId);
-      pendingChallenges.delete(peerId);
+      acceptedPeers.delete(peerId);
+      peerHandshakeData.delete(peerId);
     };
-
-    announceInterval = setInterval(() => {
-      void actions.hello.send({ role: 'overlay', protocol: OverlayCore.PROTOCOL }).catch(() => {});
-      if (relayCount() > 0) clearError();
-    }, 2500);
-
-    void actions.hello.send({ role: 'overlay', protocol: OverlayCore.PROTOCOL }).catch(() => {});
   }
 
   async function init() {
@@ -299,7 +301,6 @@ import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/
 
   window.addEventListener('beforeunload', () => {
     clearInterval(renderInterval);
-    clearInterval(announceInterval);
     for (const side of ['home', 'away', 'league']) {
       if (logoUrls[side]?.startsWith('blob:')) URL.revokeObjectURL(logoUrls[side]);
     }
