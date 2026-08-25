@@ -147,13 +147,73 @@
     return Math.min(999, Math.max(0, parsed));
   }
 
+  function normalizePeriod(value) {
+    return ['1st', '2nd', 'ET'].includes(value) ? value : '1st';
+  }
+
+  function normalizeHalfMinutes(value) {
+    return Number.parseInt(value, 10) === 20 ? 20 : 15;
+  }
+
+  function timerLimitMs(halfMinutes) {
+    return normalizeHalfMinutes(halfMinutes) * 60 * 1000;
+  }
+
+  function clampTimerElapsed(value, halfMinutes = 15) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 0;
+    return Math.min(timerLimitMs(halfMinutes), Math.max(0, Math.round(parsed)));
+  }
+
   function normalizeState(source = {}) {
+    const halfMinutes = normalizeHalfMinutes(source.half_minutes);
+    const timerElapsedMs = clampTimerElapsed(source.timer_elapsed_ms, halfMinutes);
+    const timerRunning = Boolean(source.timer_running) && timerElapsedMs < timerLimitMs(halfMinutes);
+    const rawUpdatedAt = Number(source.timer_updated_at);
+    const timerUpdatedAt = timerRunning && Number.isFinite(rawUpdatedAt) && rawUpdatedAt > 0
+      ? rawUpdatedAt
+      : (timerRunning ? Date.now() : 0);
+
     return {
       home_name: String(source.home_name ?? 'GOSPODARZE').slice(0, 40),
       away_name: String(source.away_name ?? 'GOŚCIE').slice(0, 40),
       home_score: clampScore(source.home_score),
-      away_score: clampScore(source.away_score)
+      away_score: clampScore(source.away_score),
+      period: normalizePeriod(source.period),
+      half_minutes: halfMinutes,
+      timer_elapsed_ms: timerElapsedMs,
+      timer_running: timerRunning,
+      timer_updated_at: timerUpdatedAt
     };
+  }
+
+  function timerElapsedAt(source = {}, now = Date.now()) {
+    const normalized = normalizeState(source);
+    if (!normalized.timer_running) return normalized.timer_elapsed_ms;
+    const currentTime = Number(now);
+    const delta = Number.isFinite(currentTime)
+      ? Math.max(0, currentTime - normalized.timer_updated_at)
+      : 0;
+    return clampTimerElapsed(normalized.timer_elapsed_ms + delta, normalized.half_minutes);
+  }
+
+  function snapshotState(source = {}, now = Date.now()) {
+    const normalized = normalizeState(source);
+    const currentTime = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+    const timerElapsedMs = timerElapsedAt(normalized, currentTime);
+    const timerRunning = normalized.timer_running && timerElapsedMs < timerLimitMs(normalized.half_minutes);
+    return {
+      ...normalized,
+      timer_elapsed_ms: timerElapsedMs,
+      timer_running: timerRunning,
+      timer_updated_at: timerRunning ? currentTime : 0
+    };
+  }
+
+  function portableState(source = {}, now = Date.now()) {
+    const snapshot = snapshotState(source, now);
+    const { timer_updated_at: _timerUpdatedAt, ...portable } = snapshot;
+    return portable;
   }
 
   function sanitizePatch(source = {}) {
@@ -162,7 +222,38 @@
     if (Object.prototype.hasOwnProperty.call(source, 'away_name')) patch.away_name = String(source.away_name ?? '').slice(0, 40);
     if (Object.prototype.hasOwnProperty.call(source, 'home_score')) patch.home_score = clampScore(source.home_score);
     if (Object.prototype.hasOwnProperty.call(source, 'away_score')) patch.away_score = clampScore(source.away_score);
+    if (Object.prototype.hasOwnProperty.call(source, 'period')) patch.period = normalizePeriod(source.period);
+    if (Object.prototype.hasOwnProperty.call(source, 'half_minutes')) patch.half_minutes = normalizeHalfMinutes(source.half_minutes);
+    if (Object.prototype.hasOwnProperty.call(source, 'timer_elapsed_ms')) {
+      const parsed = Number(source.timer_elapsed_ms);
+      patch.timer_elapsed_ms = Number.isFinite(parsed)
+        ? Math.min(20 * 60 * 1000, Math.max(0, Math.round(parsed)))
+        : 0;
+    }
+    if (Object.prototype.hasOwnProperty.call(source, 'timer_running')) patch.timer_running = Boolean(source.timer_running);
     return patch;
+  }
+
+  function applyPatch(current = {}, patch = {}, now = Date.now()) {
+    const currentTime = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+    const base = snapshotState(current, currentTime);
+    const cleanPatch = sanitizePatch(patch);
+    const merged = normalizeState({ ...base, ...cleanPatch });
+    const timerElapsedMs = clampTimerElapsed(merged.timer_elapsed_ms, merged.half_minutes);
+    const timerRunning = merged.timer_running && timerElapsedMs < timerLimitMs(merged.half_minutes);
+    return {
+      ...merged,
+      timer_elapsed_ms: timerElapsedMs,
+      timer_running: timerRunning,
+      timer_updated_at: timerRunning ? currentTime : 0
+    };
+  }
+
+  function formatTimer(value) {
+    const totalSeconds = Math.floor(Math.max(0, Number(value) || 0) / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   }
 
   function formatBytes(bytes) {
@@ -357,8 +448,17 @@
     buildUrl,
     copyText,
     clampScore,
+    normalizePeriod,
+    normalizeHalfMinutes,
+    timerLimitMs,
+    clampTimerElapsed,
     normalizeState,
+    timerElapsedAt,
+    snapshotState,
+    portableState,
     sanitizePatch,
+    applyPatch,
+    formatTimer,
     formatBytes,
     sendBlob,
     createAssetReceiver,

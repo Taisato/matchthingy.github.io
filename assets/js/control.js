@@ -10,6 +10,13 @@
   const preview = document.querySelector('#preview-frame');
   const overlayUrlField = document.querySelector('#overlay-url');
   const controllerUrlField = document.querySelector('#controller-url');
+  const timerCurrent = document.querySelector('#timer-current');
+  const timerPeriod = document.querySelector('#match-period');
+  const halfMinutes = document.querySelector('#half-minutes');
+  const timerSetForm = document.querySelector('#timer-set-form');
+  const timerSetValue = document.querySelector('#timer-set-value');
+  const timerToggle = document.querySelector('#timer-toggle');
+  const timerValidation = document.querySelector('#timer-validation');
 
   const state = OverlayCore.normalizeState();
   const logoBlobs = { home: null, away: null };
@@ -26,6 +33,9 @@
   let reconnectTimer = null;
   let connecting = false;
   let hasSyncedOnce = false;
+  let timerUiInterval = null;
+
+  const TIMER_PATCH_KEYS = new Set(['period', 'half_minutes', 'timer_elapsed_ms', 'timer_running']);
 
   function setStatus(message, kind = 'neutral') {
     status.textContent = message;
@@ -36,6 +46,48 @@
     errorBox.hidden = false;
     errorBox.textContent = message;
     app.hidden = true;
+  }
+
+  function hasTimerPatch(patch) {
+    return Object.keys(patch || {}).some((key) => TIMER_PATCH_KEYS.has(key));
+  }
+
+  function currentTimerPatch() {
+    const snapshot = OverlayCore.portableState(state);
+    return {
+      period: snapshot.period,
+      half_minutes: snapshot.half_minutes,
+      timer_elapsed_ms: snapshot.timer_elapsed_ms,
+      timer_running: snapshot.timer_running
+    };
+  }
+
+  function setTimerValidation(message = '', kind = 'neutral') {
+    timerValidation.textContent = message;
+    timerValidation.dataset.kind = kind;
+  }
+
+  function refreshTimerUi({ syncInput = false } = {}) {
+    const elapsed = OverlayCore.timerElapsedAt(state);
+    const limit = OverlayCore.timerLimitMs(state.half_minutes);
+
+    if (state.timer_running && elapsed >= limit) {
+      Object.assign(state, OverlayCore.applyPatch(state, { timer_elapsed_ms: limit, timer_running: false }));
+    }
+
+    const currentElapsed = OverlayCore.timerElapsedAt(state);
+    timerCurrent.textContent = OverlayCore.formatTimer(currentElapsed);
+    timerToggle.textContent = state.timer_running ? 'Pauza' : 'Start';
+    timerToggle.setAttribute('aria-pressed', state.timer_running ? 'true' : 'false');
+
+    if (syncInput) {
+      timerPeriod.value = state.period;
+      halfMinutes.value = String(state.half_minutes);
+    }
+
+    if (syncInput || document.activeElement !== timerSetValue) {
+      timerSetValue.value = OverlayCore.formatTimer(currentElapsed);
+    }
   }
 
   function setLogoPreview(side, source) {
@@ -61,6 +113,7 @@
     document.querySelector('#away-name').value = state.away_name;
     document.querySelector('#home-score').value = state.home_score;
     document.querySelector('#away-score').value = state.away_score;
+    refreshTimerUi({ syncInput: true });
     postPreview();
   }
 
@@ -68,7 +121,7 @@
     if (!preview.contentWindow) return;
     preview.contentWindow.postMessage({
       type: 'overlay-preview',
-      state: { ...state },
+      state: OverlayCore.portableState(state),
       logos: { home: logoUrls.home || '', away: logoUrls.away || '' }
     }, window.location.origin);
   }
@@ -78,13 +131,15 @@
   }
 
   function sendPatch(patch) {
-    Object.assign(state, patch);
+    const cleanPatch = OverlayCore.sanitizePatch(patch);
+    if (!Object.keys(cleanPatch).length) return;
+    Object.assign(state, OverlayCore.applyPatch(state, cleanPatch));
     syncInputs();
     if (authenticated && connection?.open) {
-      connection.send({ type: 'patch', patch });
+      connection.send({ type: 'patch', patch: cleanPatch });
       setStatus('Połączono • zmiana wysłana', 'ok');
     } else {
-      queuePatch(patch);
+      queuePatch(cleanPatch);
       setStatus('OBS offline • zmiana czeka na połączenie', 'warning');
     }
   }
@@ -117,6 +172,7 @@
     if (!authenticated || !connection?.open) return;
     if (Object.keys(queuedPatch).length) {
       const patch = { ...queuedPatch };
+      if (hasTimerPatch(patch)) Object.assign(patch, currentTimerPatch());
       for (const key of Object.keys(queuedPatch)) delete queuedPatch[key];
       connection.send({ type: 'patch', patch });
     }
@@ -128,6 +184,72 @@
         else await sendLogo(side, queued.blob, queued.name);
       }
     }
+  }
+
+  function parseTimerValue(value) {
+    const match = String(value || '').trim().match(/^(\d{1,2}):([0-5]\d)$/);
+    if (!match) return null;
+    const minutes = Number.parseInt(match[1], 10);
+    const seconds = Number.parseInt(match[2], 10);
+    return (minutes * 60 + seconds) * 1000;
+  }
+
+  function bindTimer() {
+    timerPeriod.addEventListener('change', () => {
+      setTimerValidation();
+      sendPatch({ period: timerPeriod.value });
+    });
+
+    halfMinutes.addEventListener('change', () => {
+      setTimerValidation();
+      sendPatch({ half_minutes: Number.parseInt(halfMinutes.value, 10) });
+    });
+
+    timerSetForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const elapsed = parseTimerValue(timerSetValue.value);
+      if (elapsed === null) {
+        setTimerValidation('Podaj czas w formacie MM:SS, np. 07:30.', 'error');
+        timerSetValue.focus();
+        return;
+      }
+      const limit = OverlayCore.timerLimitMs(state.half_minutes);
+      if (elapsed > limit) {
+        setTimerValidation(`Maksymalny czas tej połowy to ${OverlayCore.formatTimer(limit)}.`, 'error');
+        timerSetValue.focus();
+        return;
+      }
+      setTimerValidation();
+      sendPatch({ timer_elapsed_ms: elapsed });
+    });
+
+    document.querySelector('#timer-minus-10').addEventListener('click', () => {
+      setTimerValidation();
+      sendPatch({ timer_elapsed_ms: OverlayCore.timerElapsedAt(state) - 10 * 1000 });
+    });
+
+    document.querySelector('#timer-plus-10').addEventListener('click', () => {
+      setTimerValidation();
+      sendPatch({ timer_elapsed_ms: OverlayCore.timerElapsedAt(state) + 10 * 1000 });
+    });
+
+    document.querySelector('#timer-reset').addEventListener('click', () => {
+      setTimerValidation();
+      sendPatch({ timer_elapsed_ms: 0 });
+    });
+
+    timerToggle.addEventListener('click', () => {
+      const elapsed = OverlayCore.timerElapsedAt(state);
+      const limit = OverlayCore.timerLimitMs(state.half_minutes);
+      if (!state.timer_running && elapsed >= limit) {
+        setTimerValidation('Ustaw czas poniżej końca połowy, aby uruchomić zegar.', 'error');
+        return;
+      }
+      setTimerValidation();
+      sendPatch({ timer_running: !state.timer_running });
+    });
+
+    timerUiInterval = setInterval(() => refreshTimerUi(), 200);
   }
 
   function bindTeam(side) {
@@ -225,11 +347,16 @@
       authenticated = true;
       connecting = false;
 
+      const localTimerState = currentTimerPatch();
       if (!hasSyncedOnce) {
-        Object.assign(state, OverlayCore.normalizeState(message.state), queuedPatch);
+        const pendingPatch = { ...queuedPatch };
+        if (hasTimerPatch(pendingPatch)) Object.assign(pendingPatch, localTimerState);
+        let syncedState = OverlayCore.normalizeState(message.state);
+        if (Object.keys(pendingPatch).length) syncedState = OverlayCore.applyPatch(syncedState, pendingPatch);
+        Object.assign(state, syncedState);
         hasSyncedOnce = true;
       } else {
-        sourceConnection.send({ type: 'patch', patch: { ...state } });
+        sourceConnection.send({ type: 'patch', patch: OverlayCore.portableState(state) });
       }
 
       const presence = message.logoPresence || {};
@@ -337,6 +464,7 @@
 
       bindTeam('home');
       bindTeam('away');
+      bindTimer();
       document.querySelector('#reset-score').addEventListener('click', () => sendPatch({ home_score: 0, away_score: 0 }));
       document.querySelector('#copy-overlay-url').addEventListener('click', async (event) => {
         await OverlayCore.copyText(overlayUrl);
@@ -385,6 +513,7 @@
 
   window.addEventListener('beforeunload', () => {
     clearTimeout(reconnectTimer);
+    clearInterval(timerUiInterval);
     assetReceiver.clear();
     for (const side of ['home', 'away']) {
       if (logoUrls[side]?.startsWith('blob:')) URL.revokeObjectURL(logoUrls[side]);

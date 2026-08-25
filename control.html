@@ -65,6 +65,49 @@
           </article>
         </div>
 
+        <section class="timer-editor" aria-labelledby="timer-editor-title">
+          <div class="timer-editor-heading">
+            <div>
+              <span class="team-label" id="timer-editor-title">Czas meczu</span>
+              <p class="muted timer-help">Zegar liczy od 00:00 do końca wybranej połowy i zatrzymuje się automatycznie.</p>
+            </div>
+            <output id="timer-current" class="timer-current" aria-live="off">00:00</output>
+          </div>
+
+          <div class="timer-settings">
+            <label class="field">
+              <span>Połowa</span>
+              <select id="match-period">
+                <option value="1st">1st</option>
+                <option value="2nd">2nd</option>
+                <option value="ET">ET</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Długość połowy</span>
+              <select id="half-minutes">
+                <option value="15">15 minut</option>
+                <option value="20">20 minut</option>
+              </select>
+            </label>
+            <form id="timer-set-form" class="field timer-set-form">
+              <span>Ustaw czas (MM:SS)</span>
+              <div class="timer-set-row">
+                <input id="timer-set-value" value="00:00" inputmode="numeric" autocomplete="off" aria-label="Ustaw czas w formacie minuty i sekundy">
+                <button class="button" type="submit">Ustaw</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="timer-actions">
+            <button id="timer-minus-10" class="button" type="button">−10 s</button>
+            <button id="timer-plus-10" class="button" type="button">+10 s</button>
+            <button id="timer-reset" class="button ghost" type="button">00:00</button>
+            <button id="timer-toggle" class="button primary timer-toggle" type="button">Start</button>
+          </div>
+          <div id="timer-validation" class="timer-validation" role="status" aria-live="polite"></div>
+        </section>
+
         <p class="muted">Logo jest wysyłane w oryginalnym pliku, bez zmniejszania rozdzielczości i bez konwersji do WebP.</p>
         <button id="reset-score" class="button danger" type="button">Wyzeruj wynik 0 : 0</button>
       </section>

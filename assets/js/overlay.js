@@ -6,6 +6,9 @@
   const room = params.room || '';
   const publicToken = params.pk || '';
   const root = document.querySelector('#scoreboard');
+  const clockRoot = document.querySelector('#match-clock');
+  const periodElement = document.querySelector('#match-period');
+  const timeElement = document.querySelector('#match-time');
   const debug = document.querySelector('#overlay-error');
 
   const state = OverlayCore.normalizeState();
@@ -14,6 +17,8 @@
   let peer = null;
   let activeConnection = null;
   let publicKey = null;
+  let timerInterval = null;
+  let timerCompletionPending = false;
 
   function initials(name) {
     return String(name || '?')
@@ -61,9 +66,19 @@
     document.querySelector(`#${side}-fallback`).textContent = initials(name);
   }
 
+  function renderClock() {
+    const elapsed = OverlayCore.timerElapsedAt(state);
+    const totalSeconds = Math.floor(elapsed / 1000);
+    periodElement.textContent = state.period;
+    timeElement.textContent = OverlayCore.formatTimer(elapsed);
+    timeElement.dateTime = `PT${Math.floor(totalSeconds / 60)}M${totalSeconds % 60}S`;
+    clockRoot.classList.add('is-ready');
+  }
+
   function render() {
     renderTeam('home');
     renderTeam('away');
+    renderClock();
     root.classList.add('is-ready');
   }
 
@@ -80,10 +95,44 @@
 
   async function persistState() {
     try {
+      Object.assign(state, OverlayCore.snapshotState(state));
       await OverlayCore.storageSet(`${room}:state`, { ...state });
     } catch (error) {
       console.warn('Nie udało się zapisać stanu lokalnie:', error);
     }
+  }
+
+  function publicState() {
+    return OverlayCore.portableState(state);
+  }
+
+  function startTimerLoop() {
+    if (timerInterval) return;
+    timerInterval = setInterval(() => {
+      const elapsed = OverlayCore.timerElapsedAt(state);
+      renderClock();
+
+      if (!state.timer_running || elapsed < OverlayCore.timerLimitMs(state.half_minutes) || timerCompletionPending) return;
+
+      timerCompletionPending = true;
+      Object.assign(state, OverlayCore.applyPatch(state, {
+        timer_elapsed_ms: OverlayCore.timerLimitMs(state.half_minutes),
+        timer_running: false
+      }));
+      renderClock();
+
+      if (previewMode) {
+        timerCompletionPending = false;
+        return;
+      }
+
+      void (async () => {
+        await persistState();
+        if (activeConnection?.open) activeConnection.send({ type: 'state', state: publicState() });
+      })().finally(() => {
+        timerCompletionPending = false;
+      });
+    }, 200);
   }
 
   async function persistLogo(side, blob) {
@@ -173,7 +222,7 @@
           clearError();
           conn.send({
             type: 'auth-ok',
-            state: { ...state },
+            state: publicState(),
             logoPresence: { home: logoBlobs.home instanceof Blob, away: logoBlobs.away instanceof Blob }
           });
           void sendStoredLogos(conn, message.knownLogos || {});
@@ -184,10 +233,10 @@
 
         if (message?.type === 'patch') {
           const patch = OverlayCore.sanitizePatch(message.patch);
-          Object.assign(state, patch);
+          Object.assign(state, OverlayCore.applyPatch(state, patch));
           render();
           await persistState();
-          conn.send({ type: 'state', state: { ...state } });
+          conn.send({ type: 'state', state: publicState() });
           return;
         }
 
@@ -199,7 +248,7 @@
         }
 
         if (message?.type === 'request-state') {
-          conn.send({ type: 'state', state: { ...state } });
+          conn.send({ type: 'state', state: publicState() });
           void sendStoredLogos(conn);
         }
       } catch (error) {
@@ -216,6 +265,8 @@
   }
 
   async function init() {
+    startTimerLoop();
+
     if (previewMode) {
       setupPreviewMode();
       return;
@@ -255,6 +306,7 @@
   }
 
   window.addEventListener('beforeunload', () => {
+    clearInterval(timerInterval);
     for (const side of ['home', 'away']) {
       if (logoUrls[side]?.startsWith('blob:')) URL.revokeObjectURL(logoUrls[side]);
     }

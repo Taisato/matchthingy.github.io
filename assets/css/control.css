@@ -12,6 +12,20 @@
 .logo-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .file-button { position: relative; overflow: hidden; }
 .file-button input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.timer-editor { border: 1px solid var(--line); border-radius: 16px; background: #0e131d; padding: 16px; }
+.timer-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.timer-help { margin-top: 5px; font-size: .82rem; }
+.timer-current { flex: 0 0 auto; min-width: 116px; text-align: right; font-size: 2.15rem; line-height: 1; font-weight: 950; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.timer-settings { margin-top: 16px; display: grid; grid-template-columns: minmax(120px, .55fr) minmax(150px, .7fr) minmax(210px, 1.1fr); gap: 10px; align-items: end; }
+.timer-editor select { width: 100%; min-height: 43px; border: 1px solid var(--line); background: #0d121b; color: var(--text); border-radius: 11px; padding: 9px 11px; outline: none; font: inherit; }
+.timer-editor select:focus { border-color: #6c8a7a; box-shadow: 0 0 0 3px rgba(117, 240, 167, .08); }
+.timer-set-form { margin: 0; }
+.timer-set-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.timer-set-row input { font-variant-numeric: tabular-nums; }
+.timer-actions { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(80px, auto)) minmax(120px, 1fr); gap: 8px; }
+.timer-toggle { min-width: 120px; }
+.timer-validation { min-height: 1.2em; margin-top: 8px; color: var(--muted); font-size: .8rem; }
+.timer-validation[data-kind="error"] { color: #ffd1d8; }
 .preview-wrap { aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: #283343; }
 .preview-wrap iframe { display: block; width: 100%; height: 100%; border: 0; }
 .warning-note { margin: 0; color: #e9c980; font-size: .82rem; line-height: 1.5; }
@@ -25,4 +39,16 @@
 @media (max-width: 650px) {
   .teams-grid { grid-template-columns: 1fr; }
   .logo-actions { grid-template-columns: 1fr; }
+  .timer-editor-heading { align-items: center; }
+  .timer-current { min-width: 96px; font-size: 1.8rem; }
+  .timer-settings { grid-template-columns: 1fr 1fr; }
+  .timer-set-form { grid-column: 1 / -1; }
+  .timer-actions { grid-template-columns: repeat(3, 1fr); }
+  .timer-toggle { grid-column: 1 / -1; }
+}
+@media (max-width: 420px) {
+  .timer-settings { grid-template-columns: 1fr; }
+  .timer-set-form { grid-column: auto; }
+  .timer-actions { grid-template-columns: repeat(2, 1fr); }
+  .timer-toggle { grid-column: 1 / -1; }
 }

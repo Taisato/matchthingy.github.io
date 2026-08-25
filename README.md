@@ -8,6 +8,10 @@ Panel sterowania łączy się z overlayem bezpośrednio przez **WebRTC DataChann
 
 - zdalna zmiana wyniku obu drużyn,
 - zmiana nazw obu drużyn,
+- zegar meczu wyświetlany pod wynikiem,
+- oznaczenie części meczu `1st`, `2nd` lub `ET`,
+- wybór długości połowy: 15 albo 20 minut,
+- start/pauza zegara, ręczne ustawianie czasu, korekta ±10 s i reset do `00:00`,
 - upload i usuwanie logo obu drużyn,
 - wysyłanie **oryginalnego pliku logo bez kompresji, WebP i limitu 180 KB**,
 - transfer dużych plików logo w małych fragmentach przez WebRTC,
@@ -57,6 +61,12 @@ Logo nie jest zmniejszane ani konwertowane. Panel odczytuje wskazany plik i prze
 Po odebraniu plik jest zapisywany lokalnie w IndexedDB przeglądarki OBS. Dzięki temu zwykłe odświeżenie źródła Browser nie wymaga ponownego wysłania logo.
 
 Nie ma sztucznego limitu 180 KB. Praktyczna maksymalna wielkość zależy wyłącznie od pamięci i limitu lokalnego storage przeglądarki/OBS, dlatego do transmisji nadal warto używać rozsądnych plików PNG/WebP/SVG zamiast wielusetmegabajtowych obrazów.
+
+## Zegar meczu
+
+Nowa nakładka zaczyna z czasem `00:00` na pauzie. Panel pozwala wybrać `1st`, `2nd` albo `ET` oraz długość połowy 15 lub 20 minut. Zegar liczy w górę i zatrzymuje się automatycznie po dojściu do wybranego limitu.
+
+Stan zegara jest zapisywany lokalnie po stronie OBS razem ze stanem meczu, więc odświeżenie źródła Browser nie zeruje aktywnego meczu. Panel utrzymuje własny bieżący czas podczas chwilowej utraty połączenia i synchronizuje stan oraz lokalne zmiany po odzyskaniu połączenia.
 
 ## 1. GitHub Pages
 
@@ -126,8 +136,7 @@ Panel i overlay korzystają z przypiętej wersji **PeerJS 1.5.5** ładowanej z j
 
 Do obecnego protokołu można bez zmiany modelu bezpieczeństwa dodać m.in.:
 
-- zegar meczu,
-- połowę / kwartę / set,
+- kwartę / set,
 - faule i kartki,
 - nazwę ligi i rundy,
 - sponsorów,
