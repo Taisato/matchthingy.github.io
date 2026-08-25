@@ -9,25 +9,41 @@
   <link rel="stylesheet" href="assets/css/overlay.css">
 </head>
 <body>
-  <main id="scoreboard" class="scoreboard" aria-label="Wynik meczu">
-    <section class="team home">
-      <div class="logo-box">
-        <img id="home-team-logo" class="team-logo" alt="" hidden>
-        <span id="home-fallback" class="logo-fallback">G</span>
+  <main id="overlay-shell" class="overlay-shell" aria-label="Nakładka meczowa">
+    <section id="league-strip" class="league-strip">
+      <div class="league-chip">
+        <div id="league-logo-box" class="league-logo-box">
+          <img id="league-logo" class="league-logo" alt="">
+        </div>
+        <span id="league-name" class="league-name">VRFS</span>
       </div>
-      <span id="home-team-name" class="team-name">GOSPODARZE</span>
-      <strong id="home-team-score" class="team-score">0</strong>
     </section>
 
-    <div class="score-divider" aria-hidden="true">:</div>
+    <section id="scoreboard" class="scoreboard" aria-label="Wynik meczu">
+      <section class="team home">
+        <div class="logo-box">
+          <img id="home-team-logo" class="team-logo" alt="" hidden>
+          <span id="home-fallback" class="logo-fallback">G</span>
+        </div>
+        <span id="home-team-name" class="team-name">GOSPODARZE</span>
+        <strong id="home-team-score" class="team-score">0</strong>
+      </section>
 
-    <section class="team away">
-      <strong id="away-team-score" class="team-score">0</strong>
-      <span id="away-team-name" class="team-name">GOŚCIE</span>
-      <div class="logo-box">
-        <img id="away-team-logo" class="team-logo" alt="" hidden>
-        <span id="away-fallback" class="logo-fallback">G</span>
-      </div>
+      <div class="score-divider" aria-hidden="true">:</div>
+
+      <section class="team away">
+        <strong id="away-team-score" class="team-score">0</strong>
+        <span id="away-team-name" class="team-name">GOŚCIE</span>
+        <div class="logo-box">
+          <img id="away-team-logo" class="team-logo" alt="" hidden>
+          <span id="away-fallback" class="logo-fallback">G</span>
+        </div>
+      </section>
+    </section>
+
+    <section id="match-meta" class="match-meta" aria-label="Informacje o meczu">
+      <div id="match-period" class="meta-pill">1st half</div>
+      <div id="match-clock" class="clock-pill">15:00</div>
     </section>
   </main>
 

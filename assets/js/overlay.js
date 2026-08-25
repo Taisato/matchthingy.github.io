@@ -5,15 +5,19 @@
   const previewMode = params.preview === '1';
   const room = params.room || '';
   const publicToken = params.pk || '';
+
+  const shell = document.querySelector('#overlay-shell');
   const root = document.querySelector('#scoreboard');
+  const leagueStrip = document.querySelector('#league-strip');
   const debug = document.querySelector('#overlay-error');
 
   const state = OverlayCore.normalizeState();
-  const logoBlobs = { home: null, away: null };
-  const logoUrls = { home: '', away: '' };
+  const logoBlobs = { home: null, away: null, league: null };
+  const logoUrls = { home: '', away: '', league: '' };
   let peer = null;
   let activeConnection = null;
   let publicKey = null;
+  let renderInterval = null;
 
   function initials(name) {
     return String(name || '?')
@@ -27,8 +31,8 @@
   }
 
   function setLogo(side, source) {
-    const image = document.querySelector(`#${side}-team-logo`);
-    const fallback = document.querySelector(`#${side}-fallback`);
+    const image = side === 'league' ? document.querySelector('#league-logo') : document.querySelector(`#${side}-team-logo`);
+    const fallback = side === 'league' ? null : document.querySelector(`#${side}-fallback`);
     if (logoUrls[side] && logoUrls[side].startsWith('blob:')) URL.revokeObjectURL(logoUrls[side]);
     logoUrls[side] = '';
 
@@ -45,11 +49,11 @@
     if (logoUrls[side]) {
       image.src = logoUrls[side];
       image.hidden = false;
-      fallback.hidden = true;
+      if (fallback) fallback.hidden = true;
     } else {
       image.removeAttribute('src');
       image.hidden = true;
-      fallback.hidden = false;
+      if (fallback) fallback.hidden = false;
     }
   }
 
@@ -61,10 +65,34 @@
     document.querySelector(`#${side}-fallback`).textContent = initials(name);
   }
 
+  function renderLeague() {
+    const showLogo = state.show_league_logo && !!logoUrls.league;
+    const showName = state.show_league_name && !!state.league_name.trim();
+    const logoBox = document.querySelector('#league-logo-box');
+    const leagueName = document.querySelector('#league-name');
+
+    logoBox.hidden = !showLogo;
+    leagueName.hidden = !showName;
+    leagueName.textContent = state.league_name || 'VRFS';
+    leagueStrip.hidden = !showLogo && !showName;
+  }
+
+  function renderClock() {
+    document.querySelector('#match-period').textContent = state.clock_period;
+    document.querySelector('#match-clock').textContent = OverlayCore.formatClock(OverlayCore.getClockRemaining(state));
+  }
+
+  function renderLayout() {
+    shell.style.setProperty('--overlay-width', `${state.overlay_width}px`);
+  }
+
   function render() {
     renderTeam('home');
     renderTeam('away');
-    root.classList.add('is-ready');
+    renderLeague();
+    renderClock();
+    renderLayout();
+    shell.classList.add('is-ready');
   }
 
   function showError(message) {
@@ -99,7 +127,7 @@
     try {
       const savedState = await OverlayCore.storageGet(`${room}:state`);
       if (savedState) Object.assign(state, OverlayCore.normalizeState(savedState));
-      for (const side of ['home', 'away']) {
+      for (const side of ['home', 'away', 'league']) {
         const blob = await OverlayCore.storageGet(`${room}:logo:${side}`);
         if (blob instanceof Blob) setLogo(side, blob);
       }
@@ -110,7 +138,7 @@
   }
 
   async function sendStoredLogos(conn, knownLogos = {}) {
-    for (const side of ['home', 'away']) {
+    for (const side of ['home', 'away', 'league']) {
       if (knownLogos?.[side]) continue;
       const blob = logoBlobs[side];
       if (blob instanceof Blob && conn?.open) {
@@ -130,8 +158,9 @@
       const message = event.data;
       if (!message || message.type !== 'overlay-preview') return;
       Object.assign(state, OverlayCore.normalizeState(message.state));
-      if (Object.prototype.hasOwnProperty.call(message.logos || {}, 'home')) setLogo('home', message.logos.home || '');
-      if (Object.prototype.hasOwnProperty.call(message.logos || {}, 'away')) setLogo('away', message.logos.away || '');
+      for (const side of ['home', 'away', 'league']) {
+        if (Object.prototype.hasOwnProperty.call(message.logos || {}, side)) setLogo(side, message.logos[side] || '');
+      }
       render();
     });
     render();
@@ -146,6 +175,7 @@
       onComplete: async ({ side, blob, transferId }) => {
         if (!authenticated) return;
         setLogo(side, blob);
+        render();
         await persistLogo(side, blob);
         conn.send({ type: 'asset-ack', side, transferId, size: blob.size });
       },
@@ -174,7 +204,7 @@
           conn.send({
             type: 'auth-ok',
             state: { ...state },
-            logoPresence: { home: logoBlobs.home instanceof Blob, away: logoBlobs.away instanceof Blob }
+            logoPresence: { home: !!logoUrls.home, away: !!logoUrls.away, league: !!logoUrls.league }
           });
           void sendStoredLogos(conn, message.knownLogos || {});
           return;
@@ -191,8 +221,9 @@
           return;
         }
 
-        if (message?.type === 'logo-remove' && ['home', 'away'].includes(message.side)) {
+        if (message?.type === 'logo-remove' && ['home', 'away', 'league'].includes(message.side)) {
           setLogo(message.side, null);
+          render();
           await persistLogo(message.side, null);
           conn.send({ type: 'logo-removed', side: message.side });
           return;
@@ -216,6 +247,8 @@
   }
 
   async function init() {
+    renderInterval = setInterval(renderClock, 250);
+
     if (previewMode) {
       setupPreviewMode();
       return;
@@ -255,7 +288,8 @@
   }
 
   window.addEventListener('beforeunload', () => {
-    for (const side of ['home', 'away']) {
+    clearInterval(renderInterval);
+    for (const side of ['home', 'away', 'league']) {
       if (logoUrls[side]?.startsWith('blob:')) URL.revokeObjectURL(logoUrls[side]);
     }
     try { peer?.destroy(); } catch (_) {}

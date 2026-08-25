@@ -1,0 +1,37 @@
+<!doctype html><meta charset="utf-8"><body>RUNNING<script src="assets/js/core.js"></script><script>
+(async()=>{
+  const out=[];
+  try {
+    const room=OverlayCore.randomHex(20);
+    const keys=await OverlayCore.generateSigningKeys();
+    const priv=await OverlayCore.importPrivateKey(keys.privateToken);
+    const pub=await OverlayCore.importPublicKey(keys.publicToken);
+    const sig=await OverlayCore.signChallenge(priv,room,'abc123');
+    out.push(['sign-verify', await OverlayCore.verifyChallenge(pub,room,'abc123',sig)]);
+    out.push(['wrong-room-rejected', !(await OverlayCore.verifyChallenge(pub,room+'x','abc123',sig))]);
+    const derived=await OverlayCore.importPublicKey(OverlayCore.publicTokenFromPrivateToken(keys.privateToken));
+    out.push(['derived-public', await OverlayCore.verifyChallenge(derived,room,'abc123',sig)]);
+
+    const bytes=new Uint8Array(190000); for(let i=0;i<bytes.length;i++) bytes[i]=i%251;
+    const original=new Blob([bytes],{type:'image/png'});
+    const sent=[];
+    const conn={open:true,dataChannel:{bufferedAmount:0},send(v){sent.push(v);}};
+    await OverlayCore.sendBlob(conn,'home',original);
+    let rebuilt=null;
+    const receiver=OverlayCore.createAssetReceiver({onComplete:({blob})=>{rebuilt=blob;}});
+    for(const msg of sent) await receiver.handle(msg);
+    const a=new Uint8Array(await original.arrayBuffer());
+    const b=new Uint8Array(await rebuilt.arrayBuffer());
+    const equal=a.length===b.length && a.every((v,i)=>v===b[i]);
+    out.push(['blob-byte-identical', equal]);
+    out.push(['blob-size', rebuilt.size===190000]);
+
+    await OverlayCore.storageSet('selftest',{ok:true,n:7});
+    const stored=await OverlayCore.storageGet('selftest');
+    out.push(['indexeddb', stored?.ok===true && stored?.n===7]);
+    await OverlayCore.storageDelete('selftest');
+
+    document.body.textContent = out.every(x=>x[1]) ? 'PASS '+JSON.stringify(out) : 'FAIL '+JSON.stringify(out);
+  } catch(e) { document.body.textContent='ERROR '+e.stack; }
+})();
+</script></body>
