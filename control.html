@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; connect-src 'self' https://0.peerjs.com wss://0.peerjs.com; img-src 'self' data: blob:; style-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Match Overlay — sterowanie</title>
+  <link rel="stylesheet" href="assets/css/common.css">
+  <link rel="stylesheet" href="assets/css/control.css">
+</head>
+<body class="app-page">
+  <main class="shell wide">
+    <header class="topbar">
+      <div>
+        <span class="eyebrow">Prywatny panel P2P</span>
+        <h1>Sterowanie meczem</h1>
+      </div>
+      <div id="connection-status" class="status compact" data-kind="neutral">Uruchamianie…</div>
+    </header>
+
+    <div id="fatal-error" class="error-card" hidden></div>
+
+    <div id="control-app" class="control-layout">
+      <section class="panel controls-panel stack-lg">
+        <div class="teams-grid">
+          <article class="team-editor">
+            <div class="team-editor-heading">
+              <span class="team-label">Drużyna 1</span>
+              <img id="home-logo-preview" class="tiny-logo" alt="Logo drużyny 1" hidden>
+            </div>
+            <label class="field">
+              <span>Nazwa</span>
+              <input id="home-name" maxlength="40" autocomplete="off">
+            </label>
+            <div class="score-control">
+              <button class="score-button" data-score-side="home" data-delta="-1" type="button" aria-label="Odejmij punkt drużynie 1">−</button>
+              <input id="home-score" type="number" min="0" max="999" inputmode="numeric" aria-label="Wynik drużyny 1">
+              <button class="score-button" data-score-side="home" data-delta="1" type="button" aria-label="Dodaj punkt drużynie 1">+</button>
+            </div>
+            <div class="logo-actions">
+              <label class="button file-button">Wgraj logo<input id="home-logo" type="file" accept="image/*"></label>
+              <button id="home-logo-remove" class="button ghost" type="button">Usuń logo</button>
+            </div>
+          </article>
+
+          <article class="team-editor">
+            <div class="team-editor-heading">
+              <span class="team-label">Drużyna 2</span>
+              <img id="away-logo-preview" class="tiny-logo" alt="Logo drużyny 2" hidden>
+            </div>
+            <label class="field">
+              <span>Nazwa</span>
+              <input id="away-name" maxlength="40" autocomplete="off">
+            </label>
+            <div class="score-control">
+              <button class="score-button" data-score-side="away" data-delta="-1" type="button" aria-label="Odejmij punkt drużynie 2">−</button>
+              <input id="away-score" type="number" min="0" max="999" inputmode="numeric" aria-label="Wynik drużyny 2">
+              <button class="score-button" data-score-side="away" data-delta="1" type="button" aria-label="Dodaj punkt drużynie 2">+</button>
+            </div>
+            <div class="logo-actions">
+              <label class="button file-button">Wgraj logo<input id="away-logo" type="file" accept="image/*"></label>
+              <button id="away-logo-remove" class="button ghost" type="button">Usuń logo</button>
+            </div>
+          </article>
+        </div>
+
+        <p class="muted">Logo jest wysyłane w oryginalnym pliku, bez zmniejszania rozdzielczości i bez konwersji do WebP.</p>
+        <button id="reset-score" class="button danger" type="button">Wyzeruj wynik 0 : 0</button>
+      </section>
+
+      <aside class="stack-lg side-column">
+        <section class="panel stack">
+          <div>
+            <span class="eyebrow">Podgląd 16:9</span>
+            <h2>Overlay</h2>
+          </div>
+          <div class="preview-wrap">
+            <iframe id="preview-frame" title="Podgląd overlayu"></iframe>
+          </div>
+        </section>
+
+        <section class="panel stack">
+          <h2>Linki</h2>
+          <label class="field">
+            <span>OBS Browser Source</span>
+            <div class="copy-row">
+              <input id="overlay-url" readonly>
+              <button id="copy-overlay-url" class="button" type="button">Kopiuj</button>
+            </div>
+          </label>
+          <label class="field private-field">
+            <span>Prywatny link sterowania</span>
+            <div class="copy-row">
+              <input id="controller-url" readonly>
+              <button id="copy-controller-url" class="button" type="button">Kopiuj</button>
+            </div>
+          </label>
+          <p class="warning-note">Prywatny link zawiera klucz podpisujący. Każdy, kto go pozna, może sterować nakładką. Link OBS nie zawiera tego klucza i nie daje uprawnień do sterowania.</p>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha512-XEKeWX+mI3Ov+tg2evDlVQFzVOIp4T8J3cNcCEPaEUGpxJV3eZaN8rHuvnFPvQpGJBHPmrozJDMpm2xcDvtmyQ==" crossorigin="anonymous"></script>
+  <script src="assets/js/core.js"></script>
+  <script src="assets/js/control.js"></script>
+</body>
+</html>
