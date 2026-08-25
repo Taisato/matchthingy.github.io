@@ -1,50 +1,44 @@
-# Match Overlay — OBS + GitHub Pages + WebRTC P2P
+# Match Overlay v3 — OBS + GitHub Pages + WebRTC P2P
 
-Statyczny overlay meczowy do **Browser Source w OBS**, hostowany na GitHub Pages. Nie używa Supabase, Firebase ani płatnego backendu.
+Wersja v3 usuwa zależność od publicznego `0.peerjs.com`. Discovery urządzeń odbywa się przez **Trystero 0.25.3 + Nostr**, z kilkoma równoległymi relayami dla większej odporności.
 
-## Nowości w tej wersji
+## Dlaczego zmiana
 
-- sterowanie wynikiem obu drużyn,
-- sterowanie nazwami drużyn,
-- upload i usuwanie logo obu drużyn,
-- **logo i nazwa ligi** z osobnymi przełącznikami pokaż/ukryj,
-- **zegar meczu** z trybami `1st half`, `2nd half`, `Extra time`,
-- przełączanie długości połowy między **15 min** i **20 min**,
-- start/pauza zegara,
-- szybkie dodawanie i odejmowanie sekund (`±5 s`, `±30 s`),
-- reset zegara do pełnego czasu aktualnej połowy,
-- **kontrola długości/szerokości całego overlayu**,
-- lokalne zapisywanie stanu oraz wszystkich logotypów w IndexedDB po stronie OBS,
-- zdalne sterowanie przez prywatny link P2P z podpisem ECDSA P-256.
+Publiczny PeerJS Cloud potrafił długo nie rejestrować peerów albo rozłączać WebSocket, przez co panel widział `OBS offline`, mimo że obie strony były uruchomione. W v3 PeerJS został usunięty.
 
-## Architektura
+## Co pozostaje bez zmian
 
-Panel sterowania łączy się z overlayem bezpośrednio przez **WebRTC DataChannel**. PeerJS Cloud jest używany wyłącznie jako publiczny serwer sygnalizacyjny do zestawienia połączenia; stan meczu i pliki logo nie są tam przechowywane.
+- GitHub Pages jako hosting statyczny,
+- 0 zł, bez konta backendowego,
+- prywatny link sterowania z kluczem ECDSA P-256,
+- osobny link read-only do OBS,
+- wynik, timer, faza meczu, 15/20 min,
+- logo i nazwy drużyn,
+- logo i nazwa ligi z przełącznikami,
+- regulowana szerokość overlayu,
+- oryginalne pliki logo bez kompresji,
+- lokalne zapisywanie stanu i logo w IndexedDB OBS.
 
-## Pliki
+## Sieć
 
-- `index.html` — generator nowych linków i kluczy,
-- `control.html` — prywatny panel sterowania,
-- `overlay.html` — Browser Source dla OBS,
-- `assets/js/core.js` — kryptografia, transfer plików, timer helpers i IndexedDB,
-- `assets/js/control.js` — logika panelu sterowania,
-- `assets/js/overlay.js` — logika overlayu,
-- `.github/workflows/pages.yml` — deployment GitHub Pages.
+Trystero używa Nostr tylko do discovery i wymiany danych potrzebnych do zestawienia WebRTC. Właściwe dane aplikacji po zestawieniu połączenia idą bezpośrednio P2P i są szyfrowane przez WebRTC.
 
-## Użytkowanie
+Konfiguracja używa kilku relayów równolegle (`redundancy: 5`), więc awaria pojedynczego endpointu nie powinna zatrzymać zestawiania połączenia.
 
-1. Wejdź na `index.html` na GitHub Pages.
-2. Kliknij **Utwórz nakładkę**.
-3. Skopiuj:
-   - prywatny link sterowania,
-   - link overlayu do OBS.
-4. W OBS dodaj źródło Browser i ustaw 1920×1080.
-5. Otwórz prywatny link sterowania na telefonie lub komputerze.
+## Bezpieczeństwo sterowania
 
-## Bezpieczeństwo
+Overlay nadal wymaga podpisu ECDSA P-256. Challenge jest dodatkowo związany z konkretnym identyfikatorem peer overlayu, aby podpisu nie dało się przekazać do innego peera.
 
-Prywatny link sterowania zawiera klucz prywatny ECDSA P‑256 zapisany po `#` w URL. Link OBS zawiera wyłącznie klucz publiczny. Overlay akceptuje komendy tylko po poprawnej kryptograficznej autoryzacji.
+## Aktualizacja z v2
 
-## Uwaga o sieci
+1. Podmień wszystkie pliki z paczki w repozytorium.
+2. Zrób commit/push.
+3. Poczekaj na zielony GitHub Action.
+4. W OBS: Browser Source → Properties → **Refresh cache of current page**.
+5. Otwórz ponownie panel sterowania.
 
-To rozwiązanie pozostaje **0 zł**, dlatego nie używa serwera TURN. W większości typowych sieci zadziała poprawnie, ale w niektórych bardzo restrykcyjnych sieciach WebRTC P2P może się nie zestawić.
+Stare linki `control.html#room=...&sk=...` i `overlay.html#room=...&pk=...` pozostają zgodne — nie trzeba generować nowego pokoju.
+
+## Ważne
+
+WebRTC nadal może wymagać TURN w skrajnie restrykcyjnych/symmetric-NAT sieciach. To osobny etap od discovery. Jeśli OBS zostanie znaleziony, ale UI pokaże błąd zestawiania P2P, wtedy przyczyną jest NAT/firewall, nie relaye Nostr.

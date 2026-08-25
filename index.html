@@ -6,12 +6,12 @@
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; img-src 'self' data: blob:; style-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Match Overlay — konfigurator</title>
-  <link rel="stylesheet" href="assets/css/common.css">
+  <link rel="stylesheet" href="assets/css/common.css?v=20260825-2">
 </head>
 <body class="app-page">
   <main class="shell narrow">
     <header class="hero">
-      <span class="eyebrow">OBS • GitHub Pages • WebRTC P2P</span>
+      <span class="eyebrow">OBS • GitHub Pages • WebRTC • Nostr</span>
       <h1>Match Overlay</h1>
       <p>Utwórz prywatny panel sterowania i osobny link Browser Source do OBS. Bez bazy danych i bez płatnego backendu.</p>
     </header>
@@ -53,7 +53,7 @@
 
     <section class="panel stack">
       <h2>Jak to działa</h2>
-      <p class="muted">Panel i OBS zestawiają zaszyfrowane połączenie WebRTC. Wynik, nazwy i oryginalne pliki logo przechodzą bezpośrednio pomiędzy urządzeniami; PeerJS Cloud służy tylko do odnalezienia urządzeń podczas zestawiania połączenia.</p>
+      <p class="muted">Panel i OBS zestawiają bezpośrednie połączenie WebRTC. Do odnalezienia urządzeń używana jest redundantna sieć publicznych relayów Nostr; po zestawieniu wynik, timer, nazwy i oryginalne pliki logo przechodzą P2P pomiędzy urządzeniami.</p>
     </section>
 
     <section class="panel stack">
@@ -62,7 +62,7 @@
     </section>
   </main>
 
-  <script src="assets/js/core.js"></script>
-  <script src="assets/js/index.js"></script>
+  <script src="assets/js/core.js?v=20260825-2"></script>
+  <script src="assets/js/index.js?v=20260825-2"></script>
 </body>
 </html>

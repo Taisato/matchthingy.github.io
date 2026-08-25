@@ -97,25 +97,25 @@
     return encodeJson(publicJwk);
   }
 
-  function authMessage(room, nonce) {
-    return TEXT_ENCODER.encode(`${PROTOCOL}|auth|${room}|${nonce}`);
+  function authMessage(room, nonce, targetPeerId = '') {
+    return TEXT_ENCODER.encode(`${PROTOCOL}|auth|${room}|${targetPeerId}|${nonce}`);
   }
 
-  async function signChallenge(privateKey, room, nonce) {
+  async function signChallenge(privateKey, room, nonce, targetPeerId = '') {
     const signature = await crypto.subtle.sign(
       { name: 'ECDSA', hash: 'SHA-256' },
       privateKey,
-      authMessage(room, nonce)
+      authMessage(room, nonce, targetPeerId)
     );
     return bytesToBase64Url(new Uint8Array(signature));
   }
 
-  async function verifyChallenge(publicKey, room, nonce, signature) {
+  async function verifyChallenge(publicKey, room, nonce, signature, targetPeerId = '') {
     return crypto.subtle.verify(
       { name: 'ECDSA', hash: 'SHA-256' },
       publicKey,
       base64UrlToBytes(signature),
-      authMessage(room, nonce)
+      authMessage(room, nonce, targetPeerId)
     );
   }
 

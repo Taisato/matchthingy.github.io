@@ -1,33 +1,40 @@
+import { joinRoom, selfId, getRelaySockets } from 'https://cdn.jsdelivr.net/npm/trystero@0.25.3/+esm';
+
 (() => {
   'use strict';
 
+  const APP_ID = 'grupa-format-match-overlay-v3';
   const params = OverlayCore.parseFragment();
   const previewMode = params.preview === '1';
-  const room = params.room || '';
+  const roomId = params.room || '';
   const publicToken = params.pk || '';
 
   const shell = document.querySelector('#overlay-shell');
-  const root = document.querySelector('#scoreboard');
   const leagueStrip = document.querySelector('#league-strip');
   const debug = document.querySelector('#overlay-error');
 
   const state = OverlayCore.normalizeState();
   const logoBlobs = { home: null, away: null, league: null };
   const logoUrls = { home: '', away: '', league: '' };
-  let peer = null;
-  let activeConnection = null;
+  const authenticatedPeers = new Set();
+  const pendingChallenges = new Map();
+
   let publicKey = null;
+  let room = null;
+  let actions = null;
   let renderInterval = null;
+  let announceInterval = null;
+
+  function relayCount() {
+    try {
+      return Object.values(getRelaySockets?.() || {}).filter((socket) => socket?.readyState === WebSocket.OPEN).length;
+    } catch (_) {
+      return 0;
+    }
+  }
 
   function initials(name) {
-    return String(name || '?')
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0])
-      .join('')
-      .toUpperCase() || '?';
+    return String(name || '?').trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || '?';
   }
 
   function setLogo(side, source) {
@@ -59,9 +66,8 @@
 
   function renderTeam(side) {
     const name = state[`${side}_name`];
-    const score = state[`${side}_score`];
     document.querySelector(`#${side}-team-name`).textContent = name;
-    document.querySelector(`#${side}-team-score`).textContent = score;
+    document.querySelector(`#${side}-team-score`).textContent = state[`${side}_score`];
     document.querySelector(`#${side}-fallback`).textContent = initials(name);
   }
 
@@ -70,7 +76,6 @@
     const showName = state.show_league_name && !!state.league_name.trim();
     const logoBox = document.querySelector('#league-logo-box');
     const leagueName = document.querySelector('#league-name');
-
     logoBox.hidden = !showLogo;
     leagueName.hidden = !showName;
     leagueName.textContent = state.league_name || 'VRFS';
@@ -82,21 +87,17 @@
     document.querySelector('#match-clock').textContent = OverlayCore.formatClock(OverlayCore.getClockRemaining(state));
   }
 
-  function renderLayout() {
-    shell.style.setProperty('--overlay-width', `${state.overlay_width}px`);
-  }
-
   function render() {
     renderTeam('home');
     renderTeam('away');
     renderLeague();
     renderClock();
-    renderLayout();
+    shell.style.setProperty('--overlay-width', `${state.overlay_width}px`);
     shell.classList.add('is-ready');
   }
 
   function showError(message) {
-    console.error(message);
+    console.warn(message);
     debug.textContent = message;
     debug.hidden = false;
   }
@@ -107,48 +108,40 @@
   }
 
   async function persistState() {
-    try {
-      await OverlayCore.storageSet(`${room}:state`, { ...state });
-    } catch (error) {
-      console.warn('Nie udało się zapisać stanu lokalnie:', error);
-    }
+    try { await OverlayCore.storageSet(`${roomId}:state`, { ...state }); }
+    catch (error) { console.warn('Nie udało się zapisać stanu:', error); }
   }
 
   async function persistLogo(side, blob) {
     try {
-      if (blob) await OverlayCore.storageSet(`${room}:logo:${side}`, blob);
-      else await OverlayCore.storageDelete(`${room}:logo:${side}`);
-    } catch (error) {
-      console.warn('Nie udało się zapisać logo lokalnie:', error);
-    }
+      if (blob) await OverlayCore.storageSet(`${roomId}:logo:${side}`, blob);
+      else await OverlayCore.storageDelete(`${roomId}:logo:${side}`);
+    } catch (error) { console.warn('Nie udało się zapisać logo:', error); }
   }
 
   async function loadLocalState() {
     try {
-      const savedState = await OverlayCore.storageGet(`${room}:state`);
+      const savedState = await OverlayCore.storageGet(`${roomId}:state`);
       if (savedState) Object.assign(state, OverlayCore.normalizeState(savedState));
       for (const side of ['home', 'away', 'league']) {
-        const blob = await OverlayCore.storageGet(`${room}:logo:${side}`);
+        const blob = await OverlayCore.storageGet(`${roomId}:logo:${side}`);
         if (blob instanceof Blob) setLogo(side, blob);
       }
-    } catch (error) {
-      console.warn('Nie udało się odczytać lokalnego stanu:', error);
-    }
+    } catch (error) { console.warn('Nie udało się odczytać lokalnego stanu:', error); }
     render();
   }
 
-  async function sendStoredLogos(conn, knownLogos = {}) {
+  async function sendStoredLogos(peerId, knownLogos = {}) {
     for (const side of ['home', 'away', 'league']) {
       if (knownLogos?.[side]) continue;
       const blob = logoBlobs[side];
-      if (blob instanceof Blob && conn?.open) {
-        try {
-          await OverlayCore.sendBlob(conn, side, blob, { purpose: 'sync-logo', name: `${side}-logo` });
-        } catch (error) {
-          console.warn('Nie udało się zsynchronizować logo z panelem:', error);
-          return;
-        }
-      }
+      if (!(blob instanceof Blob)) continue;
+      try {
+        await actions.logo.send(blob, {
+          target: peerId,
+          metadata: { side, name: `${side}-logo`, mime: blob.type || 'application/octet-stream', size: blob.size }
+        });
+      } catch (error) { console.warn('Nie udało się zsynchronizować logo:', error); }
     }
   }
 
@@ -167,83 +160,117 @@
     window.parent?.postMessage({ type: 'overlay-preview-ready' }, window.location.origin);
   }
 
-  async function setupConnection(conn) {
+  async function sendChallenge(peerId) {
     const nonce = OverlayCore.randomHex(32);
-    let authenticated = false;
+    pendingChallenges.set(peerId, nonce);
+    try {
+      await actions.challenge.send({ nonce }, { target: peerId });
+    } catch (_) {}
+  }
 
-    const receiver = OverlayCore.createAssetReceiver({
-      onComplete: async ({ side, blob, transferId }) => {
-        if (!authenticated) return;
-        setLogo(side, blob);
-        render();
-        await persistLogo(side, blob);
-        conn.send({ type: 'asset-ack', side, transferId, size: blob.size });
-      },
-      onError: (error) => console.error('Błąd odbioru logo:', error)
-    });
+  function setupActions() {
+    actions = {
+      hello: room.makeAction('hello'),
+      challenge: room.makeAction('challenge'),
+      auth: room.makeAction('auth'),
+      authOk: room.makeAction('auth-ok'),
+      patch: room.makeAction('patch'),
+      state: room.makeAction('state'),
+      logo: room.makeAction('logo'),
+      logoRemove: room.makeAction('logo-rm'),
+      logoAck: room.makeAction('logo-ack'),
+      requestState: room.makeAction('req-state')
+    };
 
-    conn.on('open', () => {
-      conn.send({ type: 'challenge', protocol: OverlayCore.PROTOCOL, room, nonce });
-    });
+    actions.hello.onMessage = (data, { peerId }) => {
+      if (data?.role !== 'control') return;
+      void actions.hello.send({ role: 'overlay', protocol: OverlayCore.PROTOCOL }, { target: peerId });
+      if (!authenticatedPeers.has(peerId)) void sendChallenge(peerId);
+    };
 
-    conn.on('data', async (message) => {
+    actions.auth.onMessage = async (data, { peerId }) => {
+      const expectedNonce = pendingChallenges.get(peerId);
+      if (!expectedNonce || data?.nonce !== expectedNonce || !data?.signature) return;
+      pendingChallenges.delete(peerId);
       try {
-        if (!authenticated) {
-          if (message?.type !== 'auth' || message.nonce !== nonce) return;
-          const ok = await OverlayCore.verifyChallenge(publicKey, room, nonce, message.signature || '');
-          if (!ok) {
-            conn.send({ type: 'auth-failed' });
-            conn.close();
-            return;
-          }
+        const ok = await OverlayCore.verifyChallenge(publicKey, roomId, expectedNonce, data.signature, selfId);
+        if (!ok) return;
+        authenticatedPeers.add(peerId);
+        clearError();
+        await actions.authOk.send({
+          state: { ...state },
+          logoPresence: { home: !!logoUrls.home, away: !!logoUrls.away, league: !!logoUrls.league }
+        }, { target: peerId });
+        await sendStoredLogos(peerId, data?.knownLogos || {});
+      } catch (error) { console.warn('Auth verify error:', error); }
+    };
 
-          authenticated = true;
-          if (activeConnection && activeConnection !== conn && activeConnection.open) activeConnection.close();
-          activeConnection = conn;
-          clearError();
-          conn.send({
-            type: 'auth-ok',
-            state: { ...state },
-            logoPresence: { home: !!logoUrls.home, away: !!logoUrls.away, league: !!logoUrls.league }
-          });
-          void sendStoredLogos(conn, message.knownLogos || {});
-          return;
-        }
+    actions.patch.onMessage = async (incoming, { peerId }) => {
+      if (!authenticatedPeers.has(peerId)) return;
+      const patch = OverlayCore.sanitizePatch(incoming);
+      Object.assign(state, patch);
+      render();
+      await persistState();
+      await actions.state.send({ ...state }, { target: peerId });
+    };
 
-        if (await receiver.handle(message)) return;
+    actions.logo.onMessage = async (data, { peerId, metadata }) => {
+      if (!authenticatedPeers.has(peerId)) return;
+      const side = metadata?.side;
+      if (!['home', 'away', 'league'].includes(side)) return;
+      const blob = data instanceof Blob ? data : new Blob([data], { type: metadata?.mime || 'application/octet-stream' });
+      setLogo(side, blob);
+      render();
+      await persistLogo(side, blob);
+      await actions.logoAck.send({ ok: true, side, size: blob.size }, { target: peerId });
+    };
 
-        if (message?.type === 'patch') {
-          const patch = OverlayCore.sanitizePatch(message.patch);
-          Object.assign(state, patch);
-          render();
-          await persistState();
-          conn.send({ type: 'state', state: { ...state } });
-          return;
-        }
+    actions.logoRemove.onMessage = async (data, { peerId }) => {
+      if (!authenticatedPeers.has(peerId)) return;
+      const side = data?.side;
+      if (!['home', 'away', 'league'].includes(side)) return;
+      setLogo(side, null);
+      render();
+      await persistLogo(side, null);
+      await actions.logoAck.send({ ok: true, side, removed: true }, { target: peerId });
+    };
 
-        if (message?.type === 'logo-remove' && ['home', 'away', 'league'].includes(message.side)) {
-          setLogo(message.side, null);
-          render();
-          await persistLogo(message.side, null);
-          conn.send({ type: 'logo-removed', side: message.side });
-          return;
-        }
+    actions.requestState.onMessage = async (data, { peerId }) => {
+      if (!authenticatedPeers.has(peerId)) return;
+      await actions.state.send({ ...state }, { target: peerId });
+      await sendStoredLogos(peerId, data?.knownLogos || {});
+    };
+  }
 
-        if (message?.type === 'request-state') {
-          conn.send({ type: 'state', state: { ...state } });
-          void sendStoredLogos(conn);
-        }
-      } catch (error) {
-        console.error(error);
+  async function initNetwork() {
+    room = joinRoom({
+      appId: APP_ID,
+      password: publicToken,
+      relayConfig: { redundancy: 5, warnOnRelayFailure: false },
+      trickleIce: true
+    }, roomId, {
+      onJoinError: ({ error }) => {
+        console.warn('Trystero OBS join error:', error);
+        showError(`P2P: ${error?.message || error}`);
       }
     });
 
-    conn.on('close', () => {
-      receiver.clear();
-      if (activeConnection === conn) activeConnection = null;
-    });
+    setupActions();
 
-    conn.on('error', (error) => console.warn('Błąd połączenia kontrolera:', error));
+    room.onPeerJoin = (peerId) => {
+      void actions.hello.send({ role: 'overlay', protocol: OverlayCore.PROTOCOL }, { target: peerId });
+    };
+    room.onPeerLeave = (peerId) => {
+      authenticatedPeers.delete(peerId);
+      pendingChallenges.delete(peerId);
+    };
+
+    announceInterval = setInterval(() => {
+      void actions.hello.send({ role: 'overlay', protocol: OverlayCore.PROTOCOL }).catch(() => {});
+      if (relayCount() > 0) clearError();
+    }, 2500);
+
+    void actions.hello.send({ role: 'overlay', protocol: OverlayCore.PROTOCOL }).catch(() => {});
   }
 
   async function init() {
@@ -254,12 +281,8 @@
       return;
     }
 
-    if (!room || !publicToken) {
+    if (!roomId || !publicToken) {
       showError('Nieprawidłowy link overlayu: brakuje pokoju lub klucza publicznego.');
-      return;
-    }
-    if (!window.Peer) {
-      showError('Nie udało się załadować modułu połączenia P2P.');
       return;
     }
 
@@ -267,21 +290,8 @@
 
     try {
       publicKey = await OverlayCore.importPublicKey(publicToken);
-      peer = new Peer(OverlayCore.peerIdForRoom(room));
-
-      peer.on('open', () => clearError());
-      peer.on('connection', (conn) => void setupConnection(conn));
-      peer.on('disconnected', () => {
-        if (!activeConnection?.open) showError('Utracono serwer sygnalizacyjny. Ponawiam połączenie…');
-        try { peer.reconnect(); } catch (_) {}
-      });
-      peer.on('error', (error) => {
-        if (error?.type === 'unavailable-id') {
-          showError('Ten link overlayu jest już otwarty w innym OBS/przeglądarce. Zamknij drugą kopię.');
-        } else {
-          showError(`P2P: ${error?.message || error}`);
-        }
-      });
+      clearError();
+      await initNetwork();
     } catch (error) {
       showError(`Nie udało się uruchomić overlayu: ${error.message || error}`);
     }
@@ -289,10 +299,11 @@
 
   window.addEventListener('beforeunload', () => {
     clearInterval(renderInterval);
+    clearInterval(announceInterval);
     for (const side of ['home', 'away', 'league']) {
       if (logoUrls[side]?.startsWith('blob:')) URL.revokeObjectURL(logoUrls[side]);
     }
-    try { peer?.destroy(); } catch (_) {}
+    try { room?.leave?.(); } catch (_) {}
   }, { once: true });
 
   void init();
